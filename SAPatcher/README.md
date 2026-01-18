@@ -3,7 +3,7 @@ This program will patch your Spartan Assault binary (only v1.1.1 supported for n
 
 Additionally this will also fix the previously unobtainable 5 achievements to be obtainable once again.
 
-*(WIP) An in-depth write up will be soon posted here explaining how this was reverse engineered and fixed.*
+***A write up detailing the fix and how it was found is available [here](https://github.com/brkzlr/SASSFix/blob/master/SAPatcher/WRITEUP.md).***
 
 ## Build
 You'll need [Zig](https://ziglang.org/download/) to compile the source code into the patcher executable. Once you have it installed, simply run the following in the SAPatcher folder:
