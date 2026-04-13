@@ -47,11 +47,15 @@ pub fn main() void {
         PatchSA(gameBinary, 0);
     } else if (std.mem.eql(u8, @"SAv1.1.1-FAT", &digest)) {
         // Since this "Game" is a Mach-O fat binary that contains both 32bits and 64bits ARM code
-        // we'll have to translate our addresses from Ghidra with an offset that skips unrelated 32bits code.
+        // we'll have to patch both the 32bits and 64bits parts.
         PatchSA(gameBinary, 0xB44000);
+        PatchSA32(gameBinary, 0);
     } else {
         std.debug.print("Binary does not match internal v1.1.1 hashes!\nMake sure you supply an unmodified SA v1.1.1 \"Game\" binary.\n", .{});
+        return;
     }
+
+    CreatePatchedBinary(gameBinary);
 }
 
 fn PatchSA(binaryBuf: []u8, fileOffset: u32) void {
@@ -193,7 +197,108 @@ fn PatchSA(binaryBuf: []u8, fileOffset: u32) void {
     binaryBuf[0x407433 + fileOffset] = 0x38;
     // Change 3F 4D 00 71: cmp w9,#0x13 -> 3F 61 00 71: cmp w9,#0x18
     binaryBuf[0x407449 + fileOffset] = 0x61;
+}
 
+fn PatchSA32(binaryBuf: []u8, fileOffset: u32) void {
+    // Same logic as the ARM64 part (PatchSA), just different addresses and some opcodes.
+
+    binaryBuf[0x95EC78 + fileOffset] = 0x0D;
+    binaryBuf[0x95EC7C + fileOffset] = 0x0F;
+    binaryBuf[0x95EC80 + fileOffset] = 0x11;
+    binaryBuf[0x95EC84 + fileOffset] = 0x13;
+    binaryBuf[0x95EC88 + fileOffset] = 0x18;
+
+    binaryBuf[0x95EC8C + fileOffset] = 0x00; // Index
+    binaryBuf[0x95EC8D + fileOffset] = 0x01; // ID
+    binaryBuf[0x95EC8E + fileOffset] = 0x01; // Index
+    binaryBuf[0x95EC8F + fileOffset] = 0x02; // ID
+    binaryBuf[0x95EC90 + fileOffset] = 0x02; // Index
+    binaryBuf[0x95EC91 + fileOffset] = 0x03; // ID
+    binaryBuf[0x95EC92 + fileOffset] = 0x03; // Index
+    binaryBuf[0x95EC93 + fileOffset] = 0x04; // ID
+    binaryBuf[0x95EC94 + fileOffset] = 0x04; // Index
+    binaryBuf[0x95EC95 + fileOffset] = 0x05; // ID
+    binaryBuf[0x95EC96 + fileOffset] = 0x05; // Index
+    binaryBuf[0x95EC97 + fileOffset] = 0x06; // ID
+    binaryBuf[0x95EC98 + fileOffset] = 0x06; // Index
+    binaryBuf[0x95EC99 + fileOffset] = 0x07; // ID
+    binaryBuf[0x95EC9A + fileOffset] = 0x07; // Index
+    binaryBuf[0x95EC9B + fileOffset] = 0x08; // ID
+    binaryBuf[0x95EC9C + fileOffset] = 0x08; // Index
+    binaryBuf[0x95EC9D + fileOffset] = 0x09; // ID
+    binaryBuf[0x95EC9E + fileOffset] = 0x09; // Index
+    binaryBuf[0x95EC9F + fileOffset] = 0x0A; // ID
+    binaryBuf[0x95ECA0 + fileOffset] = 0x0A; // Index
+    binaryBuf[0x95ECA1 + fileOffset] = 0x0B; // ID
+    binaryBuf[0x95ECA2 + fileOffset] = 0x0B; // Index
+    binaryBuf[0x95ECA3 + fileOffset] = 0x0C; // ID
+    binaryBuf[0x95ECA4 + fileOffset] = 0x0C; // Index
+    binaryBuf[0x95ECA5 + fileOffset] = 0x0D; // ID
+    binaryBuf[0x95ECA6 + fileOffset] = 0x0D; // Index
+    binaryBuf[0x95ECA7 + fileOffset] = 0x0E; // ID
+    binaryBuf[0x95ECA8 + fileOffset] = 0x0E; // Index
+    binaryBuf[0x95ECA9 + fileOffset] = 0x0F; // ID
+    binaryBuf[0x95ECAA + fileOffset] = 0x0F; // Index
+    binaryBuf[0x95ECAB + fileOffset] = 0x10; // ID
+    binaryBuf[0x95ECAC + fileOffset] = 0x10; // Index
+    binaryBuf[0x95ECAD + fileOffset] = 0x11; // ID
+    binaryBuf[0x95ECAE + fileOffset] = 0x11; // Index
+    binaryBuf[0x95ECAF + fileOffset] = 0x12; // ID
+    binaryBuf[0x95ECB0 + fileOffset] = 0x12; // Index
+    binaryBuf[0x95ECB1 + fileOffset] = 0x13; // ID
+    binaryBuf[0x95ECB2 + fileOffset] = 0x13; // Index
+    binaryBuf[0x95ECB3 + fileOffset] = 0x14; // ID
+    binaryBuf[0x95ECB4 + fileOffset] = 0x14; // Index
+    binaryBuf[0x95ECB5 + fileOffset] = 0x1C; // ID
+    binaryBuf[0x95ECB6 + fileOffset] = 0x15; // Index
+    binaryBuf[0x95ECB7 + fileOffset] = 0x1D; // ID
+    binaryBuf[0x95ECB8 + fileOffset] = 0x16; // Index
+    binaryBuf[0x95ECB9 + fileOffset] = 0x1E; // ID
+    binaryBuf[0x95ECBA + fileOffset] = 0x17; // Index
+    binaryBuf[0x95ECBB + fileOffset] = 0x1F; // ID
+    binaryBuf[0x95ECBC + fileOffset] = 0x18; // Index
+    binaryBuf[0x95ECBD + fileOffset] = 0x20; // ID
+
+    @memset(binaryBuf[0x95ECBE + fileOffset .. 0x95ED02 + fileOffset], 0);
+
+    const achievementsUrl = "https://achievements.";
+    @memcpy(binaryBuf[0x95ED02 + fileOffset .. 0x95ED02 + fileOffset + achievementsUrl.len], achievementsUrl);
+    binaryBuf[0x95ED02 + fileOffset + achievementsUrl.len] = 0;
+
+    const profileUrl = "https://profile.";
+    @memcpy(binaryBuf[0x8E9CDB + fileOffset .. 0x8E9CDB + fileOffset + profileUrl.len], profileUrl);
+    binaryBuf[0x8E9CDB + fileOffset + profileUrl.len] = 0;
+
+    binaryBuf[0x322DEC + fileOffset] = 0x4B; // Achievements status
+    binaryBuf[0x322DEE + fileOffset] = 0x02;
+    binaryBuf[0x322DEF + fileOffset] = 0x71;
+    binaryBuf[0x322DF6 + fileOffset] = 0x63;
+    binaryBuf[0x3230A8 + fileOffset] = 0x4B; // Achievements unlock
+    binaryBuf[0x3230AA + fileOffset] = 0x4A;
+    binaryBuf[0x3230B0 + fileOffset] = 0x63;
+
+    // Cba to comment all the individual changes... we're doing the same logic as the 64 bits part
+    // changing all cmps to 25 values instead of 20 and all 4 byte access instructions to 1 byte
+    binaryBuf[0x31C48C + fileOffset] = 0x19;
+    binaryBuf[0x31C530 + fileOffset] = 0x4E;
+    binaryBuf[0x31C53C + fileOffset] = 0x11;
+    binaryBuf[0x31C53E + fileOffset] = 0x10;
+    binaryBuf[0x31C546 + fileOffset] = 0x18;
+    binaryBuf[0x31C54E + fileOffset] = 0x40;
+    binaryBuf[0x31C55B + fileOffset] = 0x78;
+    binaryBuf[0x31C56C + fileOffset] = 0x18;
+    binaryBuf[0x31C5A0 + fileOffset] = 0x18;
+    binaryBuf[0x31C5D6 + fileOffset] = 0x18;
+    binaryBuf[0x31C8FA + fileOffset] = 0x7E;
+    binaryBuf[0x31C944 + fileOffset] = 0x40;
+    binaryBuf[0x31C947 + fileOffset] = 0x78;
+    binaryBuf[0x31C94E + fileOffset] = 0x18;
+    binaryBuf[0x31C958 + fileOffset] = 0x1B;
+    binaryBuf[0x31C95A + fileOffset] = 0x10;
+    binaryBuf[0x31C968 + fileOffset] = 0x18;
+}
+
+fn CreatePatchedBinary(binaryBuf: []u8) void {
     var patchedFile = std.fs.cwd().createFile("GamePatched", .{}) catch |err| {
         std.debug.print("Error creating file for patched binary! Error: {s}\n", .{@errorName(err)});
         return;
