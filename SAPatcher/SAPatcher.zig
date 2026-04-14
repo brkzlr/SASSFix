@@ -19,13 +19,10 @@ const @"SAv1.1.1" = "04dbdf21ce13c6adbcc1dfd13185cd10";
 // MD5 hash of Spartan Assault v1.1.1 Game.app/Game fat Mach-0 binary.
 const @"SAv1.1.1-FAT" = "bdab763fa996e04e4cf2c7cb38edaccf";
 
-pub fn main() void {
-    var gpa = std.heap.DebugAllocator(.{}).init;
-    defer _ = gpa.deinit();
+pub fn main(init: std.process.Init) void {
+    const allocator = init.gpa;
 
-    const allocator = gpa.allocator();
-
-    var argsIt: std.process.ArgIterator = std.process.argsWithAllocator(allocator) catch {
+    var argsIt = init.minimal.args.iterateAllocator(allocator) catch {
         std.debug.print("Error trying to process command line args! Aborting...\n", .{});
         return;
     };
@@ -36,8 +33,8 @@ pub fn main() void {
         std.debug.print("Missing path to Game binary! Aborting...\n", .{});
         return;
     };
-    const gameBinary = std.fs.cwd().readFileAlloc(allocator, filePath, std.math.maxInt(usize)) catch |err| {
-        std.debug.print("Error opening file ({s})! Error: {s}\n", .{ filePath, @errorName(err) });
+    const gameBinary = std.Io.Dir.cwd().readFileAlloc(init.io, filePath, allocator, .unlimited) catch |err| {
+        std.debug.print("Error opening file \"{s}\"! Error: {s}\n", .{ filePath, @errorName(err) });
         return;
     };
     defer allocator.free(gameBinary);
@@ -55,7 +52,21 @@ pub fn main() void {
         return;
     }
 
-    CreatePatchedBinary(gameBinary);
+    var patchedFile = std.Io.Dir.cwd().createFile(init.io, "GamePatched", .{}) catch |err| {
+        std.debug.print("Error creating file for patched binary! Error: {s}\n", .{@errorName(err)});
+        return;
+    };
+    defer patchedFile.close(init.io);
+
+    var fileWriter = patchedFile.writerStreaming(init.io, &.{});
+    defer fileWriter.end() catch |err| {
+        std.debug.print("Error closing fileWriter! Error: {s}\n", .{@errorName(err)});
+    };
+
+    fileWriter.interface.writeAll(gameBinary) catch |err| {
+        std.debug.print("Error writing file for patched binary! Error: {s}\n", .{@errorName(err)});
+        return;
+    };
 }
 
 fn PatchSA(binaryBuf: []u8, fileOffset: u32) void {
@@ -296,22 +307,4 @@ fn PatchSA32(binaryBuf: []u8, fileOffset: u32) void {
     binaryBuf[0x31C958 + fileOffset] = 0x1B;
     binaryBuf[0x31C95A + fileOffset] = 0x10;
     binaryBuf[0x31C968 + fileOffset] = 0x18;
-}
-
-fn CreatePatchedBinary(binaryBuf: []u8) void {
-    var patchedFile = std.fs.cwd().createFile("GamePatched", .{}) catch |err| {
-        std.debug.print("Error creating file for patched binary! Error: {s}\n", .{@errorName(err)});
-        return;
-    };
-    defer patchedFile.close();
-
-    var fileWriter = patchedFile.writerStreaming(&.{});
-    defer fileWriter.end() catch |err| {
-        std.debug.print("Error closing fileWriter! Error: {s}\n", .{@errorName(err)});
-    };
-
-    fileWriter.interface.writeAll(binaryBuf) catch |err| {
-        std.debug.print("Error writing file for patched binary! Error: {s}\n", .{@errorName(err)});
-        return;
-    };
 }
