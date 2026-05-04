@@ -5,6 +5,13 @@ Additionally this will also fix the previously unobtainable 5 achievements to be
 
 ***A write up detailing the fix and how it was found is available [here](https://github.com/brkzlr/SASSFix/blob/master/SAPatcher/WRITEUP.md).***
 
+## Update 2026/05/04
+As of a few days ago, Microsoft has started blocking the `XBL2.0` token authorization flow which both SA and SS used, effectively breaking the login for these games once again.
+
+You will now need to use the new ***`SASSInterceptV2.py`*** mitmproxy script to be able to login to both games, ***including patched iOS SA***. More info **[here](https://github.com/brkzlr/SASSFix/blob/master/Proxy/README.md)**.
+
+**Note: You now only need this patcher if you're interested in obtaining the 5 unobtainable achievements in the iOS version, as the login fix included in this patch is now obsolete. If you don't care about the 5 achievements for whatever reason and just want to be able to login again, you can skip this and just use the Proxy way.**
+
 ## Build
 **You can skip this step if there's already a prebuilt package for your OS/Arch combo in [Releases](https://github.com/brkzlr/SASSFix/releases)**
 
