@@ -23,8 +23,9 @@ This will restore previously lost functionality and allow you to login and earn 
   - Follow the [instructions here](https://docs.mitmproxy.org/stable/overview/installation/) to make sure the program is installed and running correctly.
 - Download the redirection script ~~[SASSIntercept.py](https://github.com/brkzlr/SASSFix/blob/master/Proxy/SASSIntercept.py)~~ [SASSInterceptV2.py](https://github.com/brkzlr/SASSFix/blob/master/Proxy/SASSInterceptV2.py) by clicking on the small "Download raw file" button next to the **Raw** button.
   - Or use it directly if you cloned/downloaded this repo.
-- Run the proxy server by going to the installation location (where the binary is) and run `mitmproxy -s "location of SASSInterceptV2.py"`.
-  - If on Windows, make sure you include the extension `.py`.
+- Run the proxy server by typing in command prompt/terminal: `mitmproxy -s "(folder where the script was downloaded)/SASSInterceptV2.py"`.
+  - If on Windows, you must use backslashes, like this: `mitmproxy -s "(folder where the script was downloaded)\SASSInterceptV2.py"`.
+  - Don't actually type "(folder where the script was downloaded)" but actually replace it with the location of the script. ***Yes, I have to mention this. You'd be surprised how many told me about this mistake***.
 - On your iPhone, setup proxy on your connected network.
   - Go to Wi-Fi settings and press on the big **i** next to your connected Wi-Fi network.
   - Scroll all the way down to **HTTP Proxy** and press on **Configure Proxy**.
