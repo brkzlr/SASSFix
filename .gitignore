@@ -1,4 +1,5 @@
-.DS_Store
+.*
+*.ipa
 SAPatcher/SAPatcher
 SAPatcher/SAPatcher.exe
 SAPatcher/SAPatcher.pdb

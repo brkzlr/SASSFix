@@ -30,9 +30,17 @@ pub fn main(init: std.process.Init) void {
 
     _ = argsIt.skip();
     const filePath = argsIt.next() orelse {
-        std.debug.print("Missing path to Game binary! Aborting...\n", .{});
+        std.debug.print("Missing path to Game binary or IPA! Aborting...\n", .{});
         return;
     };
+
+    if (std.ascii.eqlIgnoreCase(std.fs.path.extension(filePath), ".ipa")) {
+        patchIpa(init, allocator, filePath) catch |err| {
+            std.debug.print("Error patching IPA \"{s}\"! Error: {s}\n", .{ filePath, @errorName(err) });
+        };
+        return;
+    }
+
     const gameBinary = std.Io.Dir.cwd().readFileAlloc(init.io, filePath, allocator, .unlimited) catch |err| {
         std.debug.print("Error opening file \"{s}\"! Error: {s}\n", .{ filePath, @errorName(err) });
         return;
@@ -307,4 +315,249 @@ fn PatchSA32(binaryBuf: []u8, fileOffset: u32) void {
     binaryBuf[0x31C958 + fileOffset] = 0x1B;
     binaryBuf[0x31C95A + fileOffset] = 0x10;
     binaryBuf[0x31C968 + fileOffset] = 0x18;
+}
+
+const ZipEntryInfo = struct {
+    central_header: std.zip.CentralDirectoryFileHeader,
+    entry: std.zip.Iterator.Entry,
+    filename: []u8,
+    extra: []u8,
+    comment: []u8,
+    new_file_offset: u32 = 0,
+
+    fn deinit(self: ZipEntryInfo, allocator: std.mem.Allocator) void {
+        allocator.free(self.filename);
+        allocator.free(self.extra);
+        allocator.free(self.comment);
+    }
+};
+
+fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []const u8) !void {
+    var ipaFile = try std.Io.Dir.cwd().openFile(init.io, ipaPath, .{});
+    defer ipaFile.close(init.io);
+
+    var inputBuffer: [64 * 1024]u8 = undefined;
+    var ipaReader = ipaFile.reader(init.io, &inputBuffer);
+
+    var entries: std.ArrayList(ZipEntryInfo) = .empty;
+    defer {
+        for (entries.items) |entry| entry.deinit(allocator);
+        entries.deinit(allocator);
+    }
+
+    var iterator = try std.zip.Iterator.init(&ipaReader);
+    var patched_game: ?[]u8 = null;
+    defer if (patched_game) |game| allocator.free(game);
+    var target_offset: u64 = undefined;
+
+    while (try iterator.next()) |entry| {
+        try ipaReader.seekTo(entry.header_zip_offset);
+        const central_header = try ipaReader.interface.takeStruct(std.zip.CentralDirectoryFileHeader, .little);
+        if (!std.mem.eql(u8, &central_header.signature, &std.zip.central_file_header_sig))
+            return error.ZipBadCdOffset;
+        if (entry.file_offset > std.math.maxInt(u32) or
+            central_header.local_file_header_offset == std.math.maxInt(u32) or
+            central_header.compressed_size == std.math.maxInt(u32) or
+            central_header.uncompressed_size == std.math.maxInt(u32))
+        {
+            return error.Zip64Unsupported;
+        }
+
+        const filename = try ipaReader.interface.readAlloc(allocator, central_header.filename_len);
+        errdefer allocator.free(filename);
+        const extra = try ipaReader.interface.readAlloc(allocator, central_header.extra_len);
+        errdefer allocator.free(extra);
+        const comment = try ipaReader.interface.readAlloc(allocator, central_header.comment_len);
+        errdefer allocator.free(comment);
+
+        var parts = std.mem.splitScalar(u8, filename, '/');
+        if (std.mem.eql(u8, parts.next() orelse "", "Payload") and
+            std.mem.endsWith(u8, parts.next() orelse "", ".app") and
+            std.mem.eql(u8, parts.next() orelse "", "Game") and
+            parts.next() == null)
+        {
+            if (patched_game != null) {
+                std.debug.print("Found more than one Payload/*.app/Game file inside the IPA. Aborting to avoid patching the wrong file...\n", .{});
+                return error.MultipleGameBinariesFound;
+            }
+            target_offset = entry.file_offset;
+            if (entry.uncompressed_size > std.math.maxInt(usize))
+                return error.FileTooBig;
+            switch (entry.compression_method) {
+                .store, .deflate => {},
+                else => return error.UnsupportedCompressionMethod,
+            }
+
+            try ipaReader.seekTo(entry.file_offset);
+            const local_header = try ipaReader.interface.takeStruct(std.zip.LocalFileHeader, .little);
+            if (!std.mem.eql(u8, &local_header.signature, &std.zip.local_file_header_sig))
+                return error.ZipBadFileOffset;
+            if (local_header.filename_len != entry.filename_len)
+                return error.ZipMismatchFilenameLen;
+
+            patched_game = try allocator.alloc(u8, @intCast(entry.uncompressed_size));
+            try ipaReader.seekTo(entry.file_offset +
+                @as(u64, @sizeOf(std.zip.LocalFileHeader)) +
+                @as(u64, local_header.filename_len) +
+                @as(u64, local_header.extra_len));
+            switch (entry.compression_method) {
+                .store => try ipaReader.interface.readSliceAll(patched_game.?),
+                .deflate => {
+                    var flate_buffer: [std.compress.flate.max_window_len]u8 = undefined;
+                    var decompress: std.compress.flate.Decompress = .init(&ipaReader.interface, .raw, &flate_buffer);
+                    try decompress.reader.readSliceAll(patched_game.?);
+                },
+                else => unreachable,
+            }
+
+            const digest = std.fmt.bytesToHex(std.crypto.hash.Md5.hashResult(patched_game.?), .lower);
+            if (std.mem.eql(u8, @"SAv1.1.1", &digest)) {
+                PatchSA(patched_game.?, 0);
+            } else if (std.mem.eql(u8, @"SAv1.1.1-FAT", &digest)) {
+                PatchSA(patched_game.?, 0xB44000);
+                PatchSA32(patched_game.?, 0);
+            } else {
+                std.debug.print("Binary inside IPA does not match internal v1.1.1 hashes!\nMake sure you supply an unmodified SA v1.1.1 IPA.\n", .{});
+                return error.UnsupportedGameBinary;
+            }
+        }
+
+        try entries.append(allocator, .{
+            .central_header = central_header,
+            .entry = entry,
+            .filename = filename,
+            .extra = extra,
+            .comment = comment,
+        });
+    }
+
+    const game = patched_game orelse {
+        std.debug.print("Could not find Payload/*.app/Game inside the IPA.\nMake sure this is a Spartan Assault IPA, not an extracted folder or another app.\n", .{});
+        return error.GameBinaryNotFound;
+    };
+    if (game.len > std.math.maxInt(u32))
+        return error.ZipOutputTooLarge;
+    const patched_crc32 = std.hash.crc.Crc32.hash(game);
+    const patched_size: u32 = @intCast(game.len);
+    var compressed_game_writer = try std.Io.Writer.Allocating.initCapacity(allocator, game.len);
+    defer compressed_game_writer.deinit();
+    var compress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
+    var compress = try std.compress.flate.Compress.init(&compressed_game_writer.writer, &compress_buffer, .raw, .default);
+    try compress.writer.writeAll(game);
+    try compress.finish();
+    const compressed_game = compressed_game_writer.written();
+    if (compressed_game.len > std.math.maxInt(u32))
+        return error.ZipOutputTooLarge;
+    const compressed_size: u32 = @intCast(compressed_game.len);
+    if (entries.items.len > std.math.maxInt(u16))
+        return error.ZipTooManyEntries;
+
+    std.sort.pdq(ZipEntryInfo, entries.items, {}, struct {
+        fn lessThan(_: void, lhs: ZipEntryInfo, rhs: ZipEntryInfo) bool {
+            return lhs.entry.file_offset < rhs.entry.file_offset;
+        }
+    }.lessThan);
+
+    const out_basename = try std.fmt.allocPrint(allocator, "{s}-patched.ipa", .{std.fs.path.stem(std.fs.path.basename(ipaPath))});
+    defer allocator.free(out_basename);
+    const outPath = if (std.fs.path.dirname(ipaPath)) |dir|
+        try std.fs.path.join(allocator, &.{ dir, out_basename })
+    else
+        try allocator.dupe(u8, out_basename);
+    defer allocator.free(outPath);
+
+    var outFile = try std.Io.Dir.cwd().createFile(init.io, outPath, .{});
+    defer outFile.close(init.io);
+
+    var outputBuffer: [64 * 1024]u8 = undefined;
+    var outWriter = outFile.writerStreaming(init.io, &outputBuffer);
+    defer outWriter.end() catch |err| {
+        std.debug.print("Error closing output IPA writer! Error: {s}\n", .{@errorName(err)});
+    };
+    const out = &outWriter.interface;
+
+    for (entries.items, 0..) |*entry, index| {
+        const output_pos = outWriter.logicalPos();
+        if (output_pos > std.math.maxInt(u32))
+            return error.ZipOutputTooLarge;
+        entry.new_file_offset = @intCast(output_pos);
+
+        if (entry.entry.file_offset == target_offset) {
+            try out.writeAll(&std.zip.local_file_header_sig);
+            try out.writeInt(u16, 20, .little);
+            try out.writeInt(u16, 0, .little);
+            try out.writeInt(u16, @intFromEnum(std.zip.CompressionMethod.deflate), .little);
+            try out.writeInt(u16, entry.central_header.last_modification_time, .little);
+            try out.writeInt(u16, entry.central_header.last_modification_date, .little);
+            try out.writeInt(u32, patched_crc32, .little);
+            try out.writeInt(u32, compressed_size, .little);
+            try out.writeInt(u32, patched_size, .little);
+            try out.writeInt(u16, @intCast(entry.filename.len), .little);
+            try out.writeInt(u16, 0, .little);
+            try out.writeAll(entry.filename);
+            try out.writeAll(compressed_game);
+            std.debug.print("Patched {s} inside the IPA.\n", .{entry.filename});
+        } else {
+            const end = if (index + 1 < entries.items.len)
+                entries.items[index + 1].entry.file_offset
+            else
+                iterator.cd_zip_offset;
+            try ipaReader.seekTo(entry.entry.file_offset);
+            try ipaReader.interface.streamExact64(out, end - entry.entry.file_offset);
+        }
+    }
+
+    const central_dir_offset_u64 = outWriter.logicalPos();
+    if (central_dir_offset_u64 > std.math.maxInt(u32))
+        return error.ZipOutputTooLarge;
+    const central_dir_offset: u32 = @intCast(central_dir_offset_u64);
+
+    for (entries.items) |entry| {
+        const header = entry.central_header;
+        const is_target_game = entry.entry.file_offset == target_offset;
+        const extra: []const u8 = if (is_target_game) &.{} else entry.extra;
+        const comment: []const u8 = if (is_target_game) &.{} else entry.comment;
+        if (entry.filename.len > std.math.maxInt(u16) or
+            extra.len > std.math.maxInt(u16) or
+            comment.len > std.math.maxInt(u16))
+        {
+            return error.ZipOutputTooLarge;
+        }
+
+        try out.writeAll(&std.zip.central_file_header_sig);
+        try out.writeInt(u16, header.version_made_by, .little);
+        try out.writeInt(u16, if (is_target_game) 20 else header.version_needed_to_extract, .little);
+        try out.writeInt(u16, if (is_target_game) 0 else @as(u16, @bitCast(header.flags)), .little);
+        try out.writeInt(u16, if (is_target_game) @intFromEnum(std.zip.CompressionMethod.deflate) else @intFromEnum(header.compression_method), .little);
+        try out.writeInt(u16, header.last_modification_time, .little);
+        try out.writeInt(u16, header.last_modification_date, .little);
+        try out.writeInt(u32, if (is_target_game) patched_crc32 else header.crc32, .little);
+        try out.writeInt(u32, if (is_target_game) compressed_size else header.compressed_size, .little);
+        try out.writeInt(u32, if (is_target_game) patched_size else header.uncompressed_size, .little);
+        try out.writeInt(u16, @intCast(entry.filename.len), .little);
+        try out.writeInt(u16, @intCast(extra.len), .little);
+        try out.writeInt(u16, @intCast(comment.len), .little);
+        try out.writeInt(u16, header.disk_number, .little);
+        try out.writeInt(u16, header.internal_file_attributes, .little);
+        try out.writeInt(u32, header.external_file_attributes, .little);
+        try out.writeInt(u32, entry.new_file_offset, .little);
+        try out.writeAll(entry.filename);
+        try out.writeAll(extra);
+        try out.writeAll(comment);
+    }
+
+    const central_dir_size_u64 = outWriter.logicalPos() - central_dir_offset_u64;
+    if (central_dir_size_u64 > std.math.maxInt(u32))
+        return error.ZipOutputTooLarge;
+
+    try out.writeAll(&std.zip.end_record_sig);
+    try out.writeInt(u16, 0, .little);
+    try out.writeInt(u16, 0, .little);
+    try out.writeInt(u16, @intCast(entries.items.len), .little);
+    try out.writeInt(u16, @intCast(entries.items.len), .little);
+    try out.writeInt(u32, @intCast(central_dir_size_u64), .little);
+    try out.writeInt(u32, central_dir_offset, .little);
+    try out.writeInt(u16, 0, .little);
+
+    std.debug.print("Done! Wrote patched IPA to \"{s}\"\n", .{outPath});
 }
