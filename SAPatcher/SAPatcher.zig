@@ -523,9 +523,21 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
         {
             return error.ZipOutputTooLarge;
         }
+        const has_unix_mode = (header.version_made_by >> 8) == 3 and (header.external_file_attributes & 0xFFFF0000) != 0;
+        const external_file_attributes: u32 = if (is_target_game)
+            0x81ED0000
+        else if (has_unix_mode)
+            header.external_file_attributes
+        else if (std.mem.endsWith(u8, entry.filename, "/") or (header.external_file_attributes & 0x10) != 0)
+            0x41ED0010
+        else if ((header.external_file_attributes & 0x01) != 0)
+            0x81240000
+        else
+            0x81A40000;
 
         try out.writeAll(&std.zip.central_file_header_sig);
-        try out.writeInt(u16, header.version_made_by, .little);
+        // 0x0314: made by Unix (3), ZIP 2.0 (20), for entries with synthesized POSIX attrs.
+        try out.writeInt(u16, if (has_unix_mode) header.version_made_by else @as(u16, (3 << 8) | 20), .little);
         try out.writeInt(u16, if (is_target_game) 20 else header.version_needed_to_extract, .little);
         try out.writeInt(u16, if (is_target_game) 0 else @as(u16, @bitCast(header.flags)), .little);
         try out.writeInt(u16, if (is_target_game) @intFromEnum(std.zip.CompressionMethod.deflate) else @intFromEnum(header.compression_method), .little);
@@ -539,7 +551,8 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
         try out.writeInt(u16, @intCast(comment.len), .little);
         try out.writeInt(u16, header.disk_number, .little);
         try out.writeInt(u16, header.internal_file_attributes, .little);
-        try out.writeInt(u32, header.external_file_attributes, .little);
+        // Preserve Unix modes if present, otherwise synthesize dir 040755, Game 100755, files 100644/100444.
+        try out.writeInt(u32, external_file_attributes, .little);
         try out.writeInt(u32, entry.new_file_offset, .little);
         try out.writeAll(entry.filename);
         try out.writeAll(extra);
