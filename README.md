@@ -10,6 +10,8 @@ Spartan Assault still gets the achievement logic fix for the 5 missing achieveme
 
 The patcher also rebuilds the IPA in a SideStore-friendly format and lowers `MinimumOSVersion` to iOS 12 when an IPA claims it needs something newer.
 
+It also skips the startup intro movies for both games to avoid the common crash during the opening videos. In-game movies are left alone.
+
 ## Update 2026/05/04
 As of a few days ago, Microsoft has started blocking the `XBL2.0` token authorization flow which both SA and SS used, effectively breaking the login for these games once again.
 

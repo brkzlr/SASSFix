@@ -3,6 +3,8 @@ This program patches Spartan Assault and Spartan Strike v1.1.1 IPAs so the games
 
 For Spartan Assault, it also makes the previously unobtainable 5 achievements obtainable once again. For Spartan Strike, it only applies the network fix.
 
+The patcher also skips the startup intro movies for both games to avoid the common crash during the opening videos. In-game movies are left alone.
+
 ***A write up detailing the fix and how it was found is available [here](https://github.com/brkzlr/SASSFix/blob/master/SASSPatcher/WRITEUP.md).***
 
 ## Update 2026/07/02
@@ -41,13 +43,15 @@ If you got it directly from a website, it's most likely decrypted already.
     - Windows: `SASSPatcher.exe "Halo - Spartan Assault.ipa"` (or whatever is the name of the IPA file)
       - On Windows 11, you might have PowerShell as default instead of command prompt, in which case you need to type `.\SASSPatcher.exe "Halo - Spartan Assault.ipa"` instead.
 
-This should produce a new file ending with `-patched.ipa` next to the original IPA. The new IPA contains both the patched `Game` binary and `Payload/Game.app/Frameworks/SASSFix.dylib`. Install that IPA file using your preferred installation method.
-
 When patching an IPA, the patcher also:
 - Rebuilds the IPA in a format accepted by sideloading tools that reject some older/repacked IPAs.
-- Lowers `MinimumOSVersion` to iOS 12 if the IPA claims it needs a newer iOS version.
+- Lowers `MinimumOSVersion` to iOS 12 (latest iOS version supported by earliest 64bits iPhones like 5s/6) if the IPA claims it needs a newer iOS version.
+
+This should produce a new file ending with `-patched.ipa` next to the original IPA. The new IPA contains both the patched `Game` binary and `Payload/Game.app/Frameworks/SASSFix.dylib`. Install that IPA file using your preferred installation method.
 
 *Instructions on how to install IPA files are out of scope, plenty of tutorials and methods are available if you look it up on Google.*
+
+**Jailbreak install note:** If you are installing the patched IPA on a jailbroken device, use [Impactor's](https://github.com/claration/Impactor) ad-hoc signing/install option instead of AppSync Unified through Filza or similar. In testing, AppSync can leave the game's signing/entitlements in a bad state and make the game crash even when the patched IPA itself is fine.
 
 ### Debug logs
 The hook logs useful startup and network information with the `[SASSFix]` prefix. On macOS, you can use Console.app while the device is connected and filter for `[SASSFix]`.

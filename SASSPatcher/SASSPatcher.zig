@@ -223,6 +223,9 @@ fn PatchSA(binaryBuf: []u8, fileOffset: u32) void {
     binaryBuf[0x407433 + fileOffset] = 0x38;
     // Change 3F 4D 00 71: cmp w9,#0x13 -> 3F 61 00 71: cmp w9,#0x18
     binaryBuf[0x407449 + fileOffset] = 0x61;
+
+    // Skip unstable startup logo movies by forcing IntroLogos through its no-video fallback.
+    @memcpy(binaryBuf[0x274BC + fileOffset ..][0..4], &[_]u8{ 0x58, 0x00, 0x00, 0x14 });
 }
 
 fn PatchSA32(binaryBuf: []u8, fileOffset: u32) void {
@@ -322,6 +325,9 @@ fn PatchSA32(binaryBuf: []u8, fileOffset: u32) void {
     binaryBuf[0x31C958 + fileOffset] = 0x1B;
     binaryBuf[0x31C95A + fileOffset] = 0x10;
     binaryBuf[0x31C968 + fileOffset] = 0x18;
+
+    // Skip unstable startup logo movies by forcing IntroLogos through its no-video fallback.
+    @memcpy(binaryBuf[0x1E814 + fileOffset ..][0..2], &[_]u8{ 0x00, 0xBF });
 }
 
 fn injectHookDylibLoadCommand(binaryBuf: []u8, hookDylib: []const u8) !usize {
@@ -673,7 +679,13 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
             } else if (std.mem.eql(u8, @"SAv1.1.1-FAT", &digest)) {
                 PatchSA(patched_game.?, 0xB44000);
                 PatchSA32(patched_game.?, 0);
-            } else if (!std.mem.eql(u8, @"SSv1.1.1-ARMv7", &digest) and !std.mem.eql(u8, @"SSv1.1.1-ARM64", &digest)) {
+            } else if (std.mem.eql(u8, @"SSv1.1.1-ARMv7", &digest)) {
+                // Skip unstable startup logo movies by forcing IntroLogos through its no-video fallback.
+                @memcpy(patched_game.?[0x29196..][0..2], &[_]u8{ 0x69, 0xE0 });
+            } else if (std.mem.eql(u8, @"SSv1.1.1-ARM64", &digest)) {
+                // Skip unstable startup logo movies by forcing IntroLogos through its no-video fallback.
+                @memcpy(patched_game.?[0x33F1C..][0..4], &[_]u8{ 0x3F, 0x00, 0x00, 0x14 });
+            } else {
                 std.debug.print("Binary inside IPA does not match internal v1.1.1 hashes!\nMake sure you supply an unmodified SA/SS v1.1.1 IPA.\n", .{});
                 return error.UnsupportedGameBinary;
             }
