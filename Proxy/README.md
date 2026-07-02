@@ -8,9 +8,11 @@ A few days ago, people on Discord reported not being able to login anymore with 
 
 The previous fix was just changing the old deprecated profile and achievement endpoints that have been removed from Microsoft servers to point to the newer versions but the login was untouched as the game could still obtain a valid XboxLive token for use with these endpoints.
 
-**This also means that people using my patcher on iOS SA will also not be able to login anymore as the login was untouched in the patch**. Luckily by using mitmproxy, we can translate XBL2.0 to XBL3.0 and continue to use the newer XboxLive flow when communicating with Microsoft to bypass the block.
+~~**This also means that people using my patcher on iOS SA will also not be able to login anymore as the login was untouched in the patch**.~~ Luckily by using mitmproxy, we can translate XBL2.0 to XBL3.0 and continue to use the newer XboxLive flow when communicating with Microsoft to bypass the block.
 
-To fix the new problem, use the same instructions but make sure to use the ***`SASSInterceptV2.py`*** file and not V1. ***You need to use mitmproxy and the V2 script even if you're using a patched SA***.
+To fix the new problem, use the same instructions but make sure to use the ***`SASSInterceptV2.py`*** file and not V1. ~~***You need to use mitmproxy and the V2 script even if you're using a patched SA***.~~
+
+***UPDATE: Proxy is no longer needed for patched binaries as of v3, because the new proxy fix is integrated into the patch.***
 
 ## How does this work?
 By having mitmproxy active with my script and pointing your iPhone to it, every time the games will try to use the old deprecated API, mitmproxy will automatically change the URL to the correct one depending on the context and forward it:

@@ -1,4 +1,5 @@
 .*
+*.dylib
 *.ipa
 SAPatcher/SAPatcher
 SAPatcher/SAPatcher.exe

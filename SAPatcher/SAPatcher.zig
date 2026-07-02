@@ -18,6 +18,9 @@ const std = @import("std");
 const @"SAv1.1.1" = "04dbdf21ce13c6adbcc1dfd13185cd10";
 // MD5 hash of Spartan Assault v1.1.1 Game.app/Game fat Mach-0 binary.
 const @"SAv1.1.1-FAT" = "bdab763fa996e04e4cf2c7cb38edaccf";
+const hookDylibLocalPath = "SASSFix.dylib";
+const hookDylibLoadPath = "@executable_path/Frameworks/" ++ hookDylibLocalPath;
+const hookDylibIpaPath = "Payload/Game.app/Frameworks/" ++ hookDylibLocalPath;
 
 pub fn main(init: std.process.Init) void {
     const allocator = init.gpa;
@@ -317,6 +320,150 @@ fn PatchSA32(binaryBuf: []u8, fileOffset: u32) void {
     binaryBuf[0x31C968 + fileOffset] = 0x18;
 }
 
+fn injectHookDylibLoadCommand(binaryBuf: []u8, hookDylib: []const u8) !usize {
+    const CPU_TYPE_ARM: u32 = 0x0000000C;
+    const CPU_TYPE_ARM64: u32 = 0x0100000C;
+
+    if (binaryBuf.len < 8)
+        return error.MachOTooSmall;
+
+    var hook_has_arm = false;
+    var hook_has_arm64 = false;
+    if (hookDylib.len < 8)
+        return error.HookDylibTooSmall;
+    if (std.mem.readInt(u32, hookDylib[0..4], .big) == 0xCAFEBABE) {
+        const arch_count: usize = @intCast(std.mem.readInt(u32, hookDylib[4..8], .big));
+        if (arch_count > 32 or hookDylib.len < 8 + arch_count * 20)
+            return error.BadHookDylibFatHeader;
+        for (0..arch_count) |arch_index| {
+            const cpu_type = std.mem.readInt(u32, hookDylib[8 + arch_index * 20 ..][0..4], .big);
+            hook_has_arm = hook_has_arm or cpu_type == CPU_TYPE_ARM;
+            hook_has_arm64 = hook_has_arm64 or cpu_type == CPU_TYPE_ARM64;
+        }
+    } else {
+        const hook_magic = std.mem.readInt(u32, hookDylib[0..4], .little);
+        if (hook_magic != 0xFEEDFACE and hook_magic != 0xFEEDFACF)
+            return error.UnsupportedHookDylib;
+        const cpu_type = std.mem.readInt(u32, hookDylib[4..8], .little);
+        hook_has_arm = cpu_type == CPU_TYPE_ARM;
+        hook_has_arm64 = cpu_type == CPU_TYPE_ARM64;
+    }
+    if (!hook_has_arm and !hook_has_arm64)
+        return error.NoSupportedHookDylibSlice;
+
+    if (std.mem.readInt(u32, binaryBuf[0..4], .big) == 0xCAFEBABE) {
+        const arch_count: usize = @intCast(std.mem.readInt(u32, binaryBuf[4..8], .big));
+        if (arch_count > 32 or binaryBuf.len < 8 + arch_count * 20)
+            return error.BadFatHeader;
+
+        var injected_count: usize = 0;
+        for (0..arch_count) |arch_index| {
+            const arch_offset = 8 + arch_index * 20;
+            const slice_offset: usize = @intCast(std.mem.readInt(u32, binaryBuf[arch_offset + 8 ..][0..4], .big));
+            const slice_size: usize = @intCast(std.mem.readInt(u32, binaryBuf[arch_offset + 12 ..][0..4], .big));
+            if (slice_offset > binaryBuf.len or slice_size > binaryBuf.len - slice_offset)
+                return error.BadFatHeader;
+
+            const cpu_type = std.mem.readInt(u32, binaryBuf[arch_offset..][0..4], .big);
+            if ((cpu_type == CPU_TYPE_ARM and hook_has_arm) or (cpu_type == CPU_TYPE_ARM64 and hook_has_arm64)) {
+                try injectHookDylibLoadCommandMachO(binaryBuf[slice_offset .. slice_offset + slice_size]);
+                injected_count += 1;
+            }
+        }
+        if (injected_count == 0)
+            return error.NoSupportedMachOSlice;
+        return injected_count;
+    }
+
+    const cpu_type = std.mem.readInt(u32, binaryBuf[4..8], .little);
+    if ((cpu_type != CPU_TYPE_ARM or !hook_has_arm) and (cpu_type != CPU_TYPE_ARM64 or !hook_has_arm64))
+        return error.NoSupportedMachOSlice;
+    try injectHookDylibLoadCommandMachO(binaryBuf);
+    return 1;
+}
+
+fn injectHookDylibLoadCommandMachO(macho: []u8) !void {
+    const LC_LOAD_DYLIB: u32 = 0xc;
+
+    if (macho.len < 28)
+        return error.MachOTooSmall;
+
+    const magic = std.mem.readInt(u32, macho[0..4], .little);
+    const is_64 = if (magic == 0xFEEDFACF)
+        true
+    else if (magic == 0xFEEDFACE)
+        false
+    else
+        return error.UnsupportedMachO;
+    const header_size: usize = if (is_64) 32 else 28;
+    if (macho.len < header_size)
+        return error.MachOTooSmall;
+
+    const ncmds = std.mem.readInt(u32, macho[16..20], .little);
+    const sizeofcmds = std.mem.readInt(u32, macho[20..24], .little);
+    const load_commands_end = header_size + @as(usize, @intCast(sizeofcmds));
+    if (load_commands_end > macho.len)
+        return error.BadLoadCommands;
+
+    var first_section_offset: usize = std.math.maxInt(usize);
+    var command_offset: usize = header_size;
+    var command_index: u32 = 0;
+    while (command_index < ncmds) : (command_index += 1) {
+        if (load_commands_end - command_offset < 8)
+            return error.BadLoadCommands;
+
+        const cmd = std.mem.readInt(u32, macho[command_offset..][0..4], .little);
+        const cmdsize: usize = @intCast(std.mem.readInt(u32, macho[command_offset + 4 ..][0..4], .little));
+        if (cmdsize < 8 or cmdsize > load_commands_end - command_offset)
+            return error.BadLoadCommands;
+
+        if (cmd == LC_LOAD_DYLIB and cmdsize >= 24) {
+            const name_offset: usize = @intCast(std.mem.readInt(u32, macho[command_offset + 8 ..][0..4], .little));
+            if (name_offset < cmdsize) {
+                const name = macho[command_offset + name_offset .. command_offset + cmdsize];
+                const name_end = std.mem.indexOfScalar(u8, name, 0) orelse name.len;
+                if (std.mem.eql(u8, name[0..name_end], hookDylibLoadPath))
+                    return;
+            }
+        } else if (cmd == if (is_64) @as(u32, 0x19) else @as(u32, 0x1)) {
+            const segment_size: usize = if (is_64) 72 else 56;
+            const section_size: usize = if (is_64) 80 else 68;
+            if (cmdsize < segment_size)
+                return error.BadLoadCommands;
+
+            const nsects: usize = @intCast(std.mem.readInt(u32, macho[command_offset + if (is_64) @as(usize, 64) else @as(usize, 48) ..][0..4], .little));
+            if (nsects > (cmdsize - segment_size) / section_size)
+                return error.BadLoadCommands;
+            for (0..nsects) |section_index| {
+                const section_offset = command_offset + segment_size + section_index * section_size;
+                const file_offset: usize = @intCast(std.mem.readInt(u32, macho[section_offset + if (is_64) @as(usize, 48) else @as(usize, 40) ..][0..4], .little));
+                if (file_offset != 0 and file_offset < first_section_offset)
+                    first_section_offset = file_offset;
+            }
+        }
+
+        command_offset += cmdsize;
+    }
+
+    if (command_offset != load_commands_end)
+        return error.BadLoadCommands;
+
+    const new_cmdsize = (@as(u32, @intCast(24 + hookDylibLoadPath.len + 1)) + 7) & ~@as(u32, 7);
+    const new_load_commands_end = load_commands_end + @as(usize, @intCast(new_cmdsize));
+    if (new_load_commands_end > macho.len or first_section_offset == std.math.maxInt(usize) or new_load_commands_end > first_section_offset)
+        return error.NotEnoughLoadCommandSpace;
+    if (ncmds == std.math.maxInt(u32) or new_cmdsize > std.math.maxInt(u32) - sizeofcmds)
+        return error.BadLoadCommands;
+
+    @memset(macho[load_commands_end..new_load_commands_end], 0);
+    std.mem.writeInt(u32, macho[load_commands_end..][0..4], LC_LOAD_DYLIB, .little);
+    std.mem.writeInt(u32, macho[load_commands_end + 4 ..][0..4], new_cmdsize, .little);
+    std.mem.writeInt(u32, macho[load_commands_end + 8 ..][0..4], 24, .little);
+    @memcpy(macho[load_commands_end + 24 .. load_commands_end + 24 + hookDylibLoadPath.len], hookDylibLoadPath);
+    std.mem.writeInt(u32, macho[16..20], ncmds + 1, .little);
+    std.mem.writeInt(u32, macho[20..24], sizeofcmds + new_cmdsize, .little);
+}
+
 const ZipEntryInfo = struct {
     central_header: std.zip.CentralDirectoryFileHeader,
     entry: std.zip.Iterator.Entry,
@@ -369,6 +516,10 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
         errdefer allocator.free(extra);
         const comment = try ipaReader.interface.readAlloc(allocator, central_header.comment_len);
         errdefer allocator.free(comment);
+        if (std.mem.eql(u8, filename, hookDylibIpaPath)) {
+            std.debug.print("IPA already contains \"{s}\". Aborting to avoid writing a duplicate hook dylib entry...\n", .{hookDylibIpaPath});
+            return error.HookDylibAlreadyPresent;
+        }
 
         var parts = std.mem.splitScalar(u8, filename, '/');
         if (std.mem.eql(u8, parts.next() orelse "", "Payload") and
@@ -435,6 +586,13 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
         std.debug.print("Could not find Payload/*.app/Game inside the IPA.\nMake sure this is a Spartan Assault IPA, not an extracted folder or another app.\n", .{});
         return error.GameBinaryNotFound;
     };
+    const hook_dylib = std.Io.Dir.cwd().readFileAlloc(init.io, hookDylibLocalPath, allocator, .unlimited) catch |err| {
+        std.debug.print("Could not read \"{s}\" from the current folder. IPA patching needs the hook dylib next to the patcher.\n", .{hookDylibLocalPath});
+        return err;
+    };
+    defer allocator.free(hook_dylib);
+    std.debug.print("Injected load command for \"{s}\" into {d} Mach-O slice(s).\n", .{ hookDylibLoadPath, try injectHookDylibLoadCommand(game, hook_dylib) });
+
     if (game.len > std.math.maxInt(u32))
         return error.ZipOutputTooLarge;
     const patched_crc32 = std.hash.crc.Crc32.hash(game);
@@ -449,7 +607,15 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
     if (compressed_game.len > std.math.maxInt(u32))
         return error.ZipOutputTooLarge;
     const compressed_size: u32 = @intCast(compressed_game.len);
-    if (entries.items.len > std.math.maxInt(u16))
+
+    if (hook_dylib.len > std.math.maxInt(u32))
+        return error.ZipOutputTooLarge;
+    const hook_crc32 = std.hash.crc.Crc32.hash(hook_dylib);
+    const hook_size: u32 = @intCast(hook_dylib.len);
+    const hook_mod_date: u16 = 0x5CE2; // 2026-07-02
+
+    const output_entry_count = entries.items.len + 1;
+    if (output_entry_count > std.math.maxInt(u16))
         return error.ZipTooManyEntries;
 
     std.sort.pdq(ZipEntryInfo, entries.items, {}, struct {
@@ -507,6 +673,26 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
         }
     }
 
+    const hook_file_offset_u64 = outWriter.logicalPos();
+    if (hook_file_offset_u64 > std.math.maxInt(u32))
+        return error.ZipOutputTooLarge;
+    const hook_file_offset: u32 = @intCast(hook_file_offset_u64);
+
+    try out.writeAll(&std.zip.local_file_header_sig); // Local file header signature.
+    try out.writeInt(u16, 20, .little); // Version needed: ZIP 2.0.
+    try out.writeInt(u16, 0, .little); // General purpose bit flags.
+    try out.writeInt(u16, @intFromEnum(std.zip.CompressionMethod.store), .little); // Compression: store.
+    try out.writeInt(u16, 0, .little); // Last mod time.
+    try out.writeInt(u16, hook_mod_date, .little); // Last mod date.
+    try out.writeInt(u32, hook_crc32, .little); // CRC-32.
+    try out.writeInt(u32, hook_size, .little); // Compressed size.
+    try out.writeInt(u32, hook_size, .little); // Uncompressed size.
+    try out.writeInt(u16, @intCast(hookDylibIpaPath.len), .little); // File name length.
+    try out.writeInt(u16, 0, .little); // Extra field length.
+    try out.writeAll(hookDylibIpaPath); // File name.
+    try out.writeAll(hook_dylib); // File data.
+    std.debug.print("Added {s} to the IPA.\n", .{hookDylibIpaPath});
+
     const central_dir_offset_u64 = outWriter.logicalPos();
     if (central_dir_offset_u64 > std.math.maxInt(u32))
         return error.ZipOutputTooLarge;
@@ -559,6 +745,25 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
         try out.writeAll(comment);
     }
 
+    try out.writeAll(&std.zip.central_file_header_sig); // Central directory signature.
+    try out.writeInt(u16, (3 << 8) | 20, .little); // Made by Unix, ZIP 2.0.
+    try out.writeInt(u16, 20, .little); // Version needed: ZIP 2.0.
+    try out.writeInt(u16, 0, .little); // General purpose bit flags.
+    try out.writeInt(u16, @intFromEnum(std.zip.CompressionMethod.store), .little); // Compression: store.
+    try out.writeInt(u16, 0, .little); // Last mod time.
+    try out.writeInt(u16, hook_mod_date, .little); // Last mod date.
+    try out.writeInt(u32, hook_crc32, .little); // CRC-32.
+    try out.writeInt(u32, hook_size, .little); // Compressed size.
+    try out.writeInt(u32, hook_size, .little); // Uncompressed size.
+    try out.writeInt(u16, @intCast(hookDylibIpaPath.len), .little); // File name length.
+    try out.writeInt(u16, 0, .little); // Extra field length.
+    try out.writeInt(u16, 0, .little); // File comment length.
+    try out.writeInt(u16, 0, .little); // Disk number start.
+    try out.writeInt(u16, 0, .little); // Internal file attrs.
+    try out.writeInt(u32, 0x81ED0000, .little); // External attrs: regular 100755.
+    try out.writeInt(u32, hook_file_offset, .little); // Local header offset.
+    try out.writeAll(hookDylibIpaPath); // File name.
+
     const central_dir_size_u64 = outWriter.logicalPos() - central_dir_offset_u64;
     if (central_dir_size_u64 > std.math.maxInt(u32))
         return error.ZipOutputTooLarge;
@@ -566,8 +771,8 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
     try out.writeAll(&std.zip.end_record_sig);
     try out.writeInt(u16, 0, .little);
     try out.writeInt(u16, 0, .little);
-    try out.writeInt(u16, @intCast(entries.items.len), .little);
-    try out.writeInt(u16, @intCast(entries.items.len), .little);
+    try out.writeInt(u16, @intCast(output_entry_count), .little);
+    try out.writeInt(u16, @intCast(output_entry_count), .little);
     try out.writeInt(u32, @intCast(central_dir_size_u64), .little);
     try out.writeInt(u32, central_dir_offset, .little);
     try out.writeInt(u16, 0, .little);

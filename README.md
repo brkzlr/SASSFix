@@ -6,9 +6,11 @@ For more information about each variant, feel free to check their respective REA
 ## Update 2026/05/04
 As of a few days ago, Microsoft has started blocking the `XBL2.0` token authorization flow which both SA and SS used, effectively breaking the login for these games once again.
 
-You will now need to use the new ***`SASSInterceptV2.py`*** mitmproxy script to be able to login to both games, ***including patched iOS SA***. More info **[here](https://github.com/brkzlr/SASSFix/blob/master/Proxy/README.md)**.
+You will now need to use the new ***`SASSInterceptV2.py`*** mitmproxy script to be able to login to both games, ~~***including patched iOS SA***~~. More info **[here](https://github.com/brkzlr/SASSFix/blob/master/Proxy/README.md)**.
 
-**Note: You now only need the SAPatcher if you're interested in obtaining the 5 unobtainable achievements in the iOS version of SA, as the login fix included in the patch is now obsolete. If you don't care about the 5 achievements for whatever reason and just want to be able to login again, you can skip this and just use the Proxy way.**
+~~**Note: You now only need the SAPatcher if you're interested in obtaining the 5 unobtainable achievements in the iOS version of SA, as the login fix included in the patch is now obsolete. If you don't care about the 5 achievements for whatever reason and just want to be able to login again, you can skip this and just use the Proxy way.**~~
+
+***UPDATE: Proxy is no longer needed for patched binaries as of v3, because the new proxy fix is integrated into the patch.***
 
 ## What's wrong with the games?
 The games started refusing Xbox profile login requests near the beginning of 2024, stopping people from being able to earn the iOS version of achievements for these multi-platform games.
