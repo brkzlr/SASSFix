@@ -14,10 +14,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
 
-// MD5 hash of latest (as of writing) SA v1.1.1 from App Store.
+// MD5 hash of latest (as of writing) SA v1.1.1 from App Store (arm64 only).
 const @"SAv1.1.1" = "04dbdf21ce13c6adbcc1dfd13185cd10";
-// MD5 hash of Spartan Assault v1.1.1 Game.app/Game fat Mach-0 binary.
+// MD5 hash of Spartan Assault v1.1.1 Game.app/Game fat Mach-0 binary (both armv7 and arm64).
 const @"SAv1.1.1-FAT" = "bdab763fa996e04e4cf2c7cb38edaccf";
+// MD5 hashes of Spartan Strike v1.1.1 Game.app/Game thin Mach-O binaries (armv7 and arm64 separately).
+const @"SSv1.1.1-ARMv7" = "2456c1bc4c5c669c4f2fa1242a61bd73";
+const @"SSv1.1.1-ARM64" = "c1a48916f9a36c6772246019128022ea";
+
 const hookDylibLocalPath = "SASSFix.dylib";
 const hookDylibLoadPath = "@executable_path/Frameworks/" ++ hookDylibLocalPath;
 const hookDylibIpaPath = "Payload/Game.app/Frameworks/" ++ hookDylibLocalPath;
@@ -464,6 +468,105 @@ fn injectHookDylibLoadCommandMachO(macho: []u8) !void {
     std.mem.writeInt(u32, macho[20..24], sizeofcmds + new_cmdsize, .little);
 }
 
+fn PatchPlist(info_plist: []u8) !bool {
+    const target_version = "12.0";
+    const plist = struct {
+        fn patchVersion(value: []u8, target: []const u8) !bool {
+            const major = std.fmt.parseInt(u32, value[0 .. std.mem.indexOfScalar(u8, value, '.') orelse value.len], 10) catch return error.UnsupportedMinimumOSVersion;
+            if (major <= 12)
+                return false;
+            if (value.len != target.len)
+                return error.UnsupportedMinimumOSVersion;
+            @memcpy(value, target);
+            return true;
+        }
+
+        fn objectOffset(bytes: []const u8, object_index: usize, object_count: usize, offset_table_offset: usize, offset_size: usize) !usize {
+            if (object_index >= object_count)
+                return error.BadInfoPlist;
+            const offset_offset = offset_table_offset + object_index * offset_size;
+            if (offset_offset > bytes.len or offset_size > bytes.len - offset_offset)
+                return error.BadInfoPlist;
+            const offset: usize = @intCast(std.mem.readVarInt(u64, bytes[offset_offset..][0..offset_size], .big));
+            if (offset >= offset_table_offset)
+                return error.BadInfoPlist;
+            return offset;
+        }
+
+        fn object(bytes: []const u8, offset: usize, object_table_end: usize) !struct { kind: u8, count: usize, payload: usize } {
+            if (offset >= object_table_end)
+                return error.BadInfoPlist;
+
+            const marker = bytes[offset];
+            const kind = marker >> 4;
+            var count: usize = marker & 0xf;
+            var payload = offset + 1;
+            if (count == 0xf) {
+                if (payload >= object_table_end or bytes[payload] >> 4 != 0x1)
+                    return error.BadInfoPlist;
+                const int_size = @as(usize, 1) << @intCast(bytes[payload] & 0xf);
+                payload += 1;
+                if (int_size > 8 or payload > object_table_end or int_size > object_table_end - payload)
+                    return error.BadInfoPlist;
+                count = @intCast(std.mem.readVarInt(u64, bytes[payload .. payload + int_size], .big));
+                payload += int_size;
+            }
+            return .{ .kind = kind, .count = count, .payload = payload };
+        }
+
+        fn asciiString(bytes: []u8, offset: usize, object_table_end: usize) !?[]u8 {
+            const object_info = try object(bytes, offset, object_table_end);
+            if (object_info.kind != 0x5)
+                return null;
+            if (object_info.payload > object_table_end or object_info.count > object_table_end - object_info.payload)
+                return error.BadInfoPlist;
+            return bytes[object_info.payload .. object_info.payload + object_info.count];
+        }
+    };
+
+    if (!std.mem.startsWith(u8, info_plist, "bplist00")) {
+        const minimum_os_key = "<key>MinimumOSVersion</key>";
+        const open_string = "<string>";
+        if (std.mem.indexOf(u8, info_plist, minimum_os_key)) |key_offset| {
+            const value_start = key_offset + minimum_os_key.len + (std.mem.indexOf(u8, info_plist[key_offset + minimum_os_key.len ..], open_string) orelse return error.UnsupportedMinimumOSVersion) + open_string.len;
+            const value_end = value_start + (std.mem.indexOf(u8, info_plist[value_start..], "</string>") orelse return error.UnsupportedMinimumOSVersion);
+            return try plist.patchVersion(info_plist[value_start..value_end], target_version);
+        }
+        return false;
+    }
+
+    if (info_plist.len < 40)
+        return error.BadInfoPlist;
+    const trailer_offset = info_plist.len - 32;
+    const trailer = info_plist[trailer_offset..];
+    const offset_size: usize = trailer[6];
+    const ref_size: usize = trailer[7];
+    const object_count: usize = @intCast(std.mem.readVarInt(u64, trailer[8..16], .big));
+    const root_object: usize = @intCast(std.mem.readVarInt(u64, trailer[16..24], .big));
+    const offset_table_offset: usize = @intCast(std.mem.readVarInt(u64, trailer[24..32], .big));
+    if (offset_size == 0 or offset_size > 8 or ref_size == 0 or ref_size > 8 or offset_table_offset > trailer_offset or object_count > (trailer_offset - offset_table_offset) / offset_size or root_object >= object_count)
+        return error.BadInfoPlist;
+
+    const root = try plist.object(info_plist, try plist.objectOffset(info_plist, root_object, object_count, offset_table_offset, offset_size), offset_table_offset);
+    if (root.kind != 0xd)
+        return error.BadInfoPlist;
+    if (root.count > (offset_table_offset - root.payload) / ref_size / 2)
+        return error.BadInfoPlist;
+
+    const value_refs_offset = root.payload + root.count * ref_size;
+    for (0..root.count) |index| {
+        const key_ref: usize = @intCast(std.mem.readVarInt(u64, info_plist[root.payload + index * ref_size ..][0..ref_size], .big));
+        const key = (try plist.asciiString(info_plist, try plist.objectOffset(info_plist, key_ref, object_count, offset_table_offset, offset_size), offset_table_offset)) orelse continue;
+        if (!std.mem.eql(u8, key, "MinimumOSVersion"))
+            continue;
+
+        const value_ref: usize = @intCast(std.mem.readVarInt(u64, info_plist[value_refs_offset + index * ref_size ..][0..ref_size], .big));
+        const value = (try plist.asciiString(info_plist, try plist.objectOffset(info_plist, value_ref, object_count, offset_table_offset, offset_size), offset_table_offset)) orelse return error.UnsupportedMinimumOSVersion;
+        return try plist.patchVersion(value, target_version);
+    }
+    return false;
+}
+
 const ZipEntryInfo = struct {
     central_header: std.zip.CentralDirectoryFileHeader,
     entry: std.zip.Iterator.Entry,
@@ -496,6 +599,9 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
     var patched_game: ?[]u8 = null;
     defer if (patched_game) |game| allocator.free(game);
     var target_offset: u64 = undefined;
+    var info_plist: ?[]u8 = null;
+    defer if (info_plist) |plist| allocator.free(plist);
+    var info_plist_offset: u64 = undefined;
 
     while (try iterator.next()) |entry| {
         try ipaReader.seekTo(entry.header_zip_offset);
@@ -567,9 +673,39 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
             } else if (std.mem.eql(u8, @"SAv1.1.1-FAT", &digest)) {
                 PatchSA(patched_game.?, 0xB44000);
                 PatchSA32(patched_game.?, 0);
-            } else {
-                std.debug.print("Binary inside IPA does not match internal v1.1.1 hashes!\nMake sure you supply an unmodified SA v1.1.1 IPA.\n", .{});
+            } else if (!std.mem.eql(u8, @"SSv1.1.1-ARMv7", &digest) and !std.mem.eql(u8, @"SSv1.1.1-ARM64", &digest)) {
+                std.debug.print("Binary inside IPA does not match internal v1.1.1 hashes!\nMake sure you supply an unmodified SA/SS v1.1.1 IPA.\n", .{});
                 return error.UnsupportedGameBinary;
+            }
+        } else if (std.mem.eql(u8, filename, "Payload/Game.app/Info.plist")) {
+            info_plist_offset = entry.file_offset;
+            if (entry.uncompressed_size > std.math.maxInt(usize))
+                return error.FileTooBig;
+            switch (entry.compression_method) {
+                .store, .deflate => {},
+                else => return error.UnsupportedCompressionMethod,
+            }
+
+            try ipaReader.seekTo(entry.file_offset);
+            const local_header = try ipaReader.interface.takeStruct(std.zip.LocalFileHeader, .little);
+            if (!std.mem.eql(u8, &local_header.signature, &std.zip.local_file_header_sig))
+                return error.ZipBadFileOffset;
+            if (local_header.filename_len != entry.filename_len)
+                return error.ZipMismatchFilenameLen;
+
+            info_plist = try allocator.alloc(u8, @intCast(entry.uncompressed_size));
+            try ipaReader.seekTo(entry.file_offset +
+                @as(u64, @sizeOf(std.zip.LocalFileHeader)) +
+                @as(u64, local_header.filename_len) +
+                @as(u64, local_header.extra_len));
+            switch (entry.compression_method) {
+                .store => try ipaReader.interface.readSliceAll(info_plist.?),
+                .deflate => {
+                    var flate_buffer: [std.compress.flate.max_window_len]u8 = undefined;
+                    var decompress: std.compress.flate.Decompress = .init(&ipaReader.interface, .raw, &flate_buffer);
+                    try decompress.reader.readSliceAll(info_plist.?);
+                },
+                else => unreachable,
             }
         }
 
@@ -583,9 +719,14 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
     }
 
     const game = patched_game orelse {
-        std.debug.print("Could not find Payload/*.app/Game inside the IPA.\nMake sure this is a Spartan Assault IPA, not an extracted folder or another app.\n", .{});
+        std.debug.print("Could not find Payload/*.app/Game inside the IPA.\nMake sure this is a Spartan Assault/Strike IPA, not an extracted folder or another app.\n", .{});
         return error.GameBinaryNotFound;
     };
+    const info_plist_buf = info_plist orelse {
+        std.debug.print("Could not find Payload/Game.app/Info.plist inside the IPA.\n", .{});
+        return error.InfoPlistNotFound;
+    };
+    const should_patch_info_plist = try PatchPlist(info_plist_buf);
     const hook_dylib = std.Io.Dir.cwd().readFileAlloc(init.io, hookDylibLocalPath, allocator, .unlimited) catch |err| {
         std.debug.print("Could not read \"{s}\" from the current folder. IPA patching needs the hook dylib next to the patcher.\n", .{hookDylibLocalPath});
         return err;
@@ -607,6 +748,24 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
     if (compressed_game.len > std.math.maxInt(u32))
         return error.ZipOutputTooLarge;
     const compressed_size: u32 = @intCast(compressed_game.len);
+
+    var compressed_info_plist_writer = try std.Io.Writer.Allocating.initCapacity(allocator, if (should_patch_info_plist) info_plist_buf.len else 0);
+    defer compressed_info_plist_writer.deinit();
+    var compressed_info_plist: []const u8 = &.{};
+    var info_plist_crc32: u32 = 0;
+    var info_plist_size: u32 = 0;
+    if (should_patch_info_plist) {
+        if (info_plist_buf.len > std.math.maxInt(u32))
+            return error.ZipOutputTooLarge;
+        info_plist_crc32 = std.hash.crc.Crc32.hash(info_plist_buf);
+        info_plist_size = @intCast(info_plist_buf.len);
+        var compress_info_plist = try std.compress.flate.Compress.init(&compressed_info_plist_writer.writer, &compress_buffer, .raw, .default);
+        try compress_info_plist.writer.writeAll(info_plist_buf);
+        try compress_info_plist.finish();
+        compressed_info_plist = compressed_info_plist_writer.written();
+        if (compressed_info_plist.len > std.math.maxInt(u32))
+            return error.ZipOutputTooLarge;
+    }
 
     if (hook_dylib.len > std.math.maxInt(u32))
         return error.ZipOutputTooLarge;
@@ -663,6 +822,21 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
             try out.writeAll(entry.filename);
             try out.writeAll(compressed_game);
             std.debug.print("Patched {s} inside the IPA.\n", .{entry.filename});
+        } else if (should_patch_info_plist and entry.entry.file_offset == info_plist_offset) {
+            try out.writeAll(&std.zip.local_file_header_sig);
+            try out.writeInt(u16, 20, .little);
+            try out.writeInt(u16, 0, .little);
+            try out.writeInt(u16, @intFromEnum(std.zip.CompressionMethod.deflate), .little);
+            try out.writeInt(u16, entry.central_header.last_modification_time, .little);
+            try out.writeInt(u16, entry.central_header.last_modification_date, .little);
+            try out.writeInt(u32, info_plist_crc32, .little);
+            try out.writeInt(u32, @intCast(compressed_info_plist.len), .little);
+            try out.writeInt(u32, info_plist_size, .little);
+            try out.writeInt(u16, @intCast(entry.filename.len), .little);
+            try out.writeInt(u16, 0, .little);
+            try out.writeAll(entry.filename);
+            try out.writeAll(compressed_info_plist);
+            std.debug.print("Patched {s} inside the IPA.\n", .{entry.filename});
         } else {
             const end = if (index + 1 < entries.items.len)
                 entries.items[index + 1].entry.file_offset
@@ -701,8 +875,10 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
     for (entries.items) |entry| {
         const header = entry.central_header;
         const is_target_game = entry.entry.file_offset == target_offset;
-        const extra: []const u8 = if (is_target_game) &.{} else entry.extra;
-        const comment: []const u8 = if (is_target_game) &.{} else entry.comment;
+        const is_target_info_plist = should_patch_info_plist and entry.entry.file_offset == info_plist_offset;
+        const is_patched_entry = is_target_game or is_target_info_plist;
+        const extra: []const u8 = if (is_patched_entry) &.{} else entry.extra;
+        const comment: []const u8 = if (is_patched_entry) &.{} else entry.comment;
         if (entry.filename.len > std.math.maxInt(u16) or
             extra.len > std.math.maxInt(u16) or
             comment.len > std.math.maxInt(u16))
@@ -724,14 +900,14 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
         try out.writeAll(&std.zip.central_file_header_sig);
         // 0x0314: made by Unix (3), ZIP 2.0 (20), for entries with synthesized POSIX attrs.
         try out.writeInt(u16, if (has_unix_mode) header.version_made_by else @as(u16, (3 << 8) | 20), .little);
-        try out.writeInt(u16, if (is_target_game) 20 else header.version_needed_to_extract, .little);
-        try out.writeInt(u16, if (is_target_game) 0 else @as(u16, @bitCast(header.flags)), .little);
-        try out.writeInt(u16, if (is_target_game) @intFromEnum(std.zip.CompressionMethod.deflate) else @intFromEnum(header.compression_method), .little);
+        try out.writeInt(u16, if (is_patched_entry) 20 else header.version_needed_to_extract, .little);
+        try out.writeInt(u16, if (is_patched_entry) 0 else @as(u16, @bitCast(header.flags)), .little);
+        try out.writeInt(u16, if (is_patched_entry) @intFromEnum(std.zip.CompressionMethod.deflate) else @intFromEnum(header.compression_method), .little);
         try out.writeInt(u16, header.last_modification_time, .little);
         try out.writeInt(u16, header.last_modification_date, .little);
-        try out.writeInt(u32, if (is_target_game) patched_crc32 else header.crc32, .little);
-        try out.writeInt(u32, if (is_target_game) compressed_size else header.compressed_size, .little);
-        try out.writeInt(u32, if (is_target_game) patched_size else header.uncompressed_size, .little);
+        try out.writeInt(u32, if (is_target_game) patched_crc32 else if (is_target_info_plist) info_plist_crc32 else header.crc32, .little);
+        try out.writeInt(u32, if (is_target_game) compressed_size else if (is_target_info_plist) @as(u32, @intCast(compressed_info_plist.len)) else header.compressed_size, .little);
+        try out.writeInt(u32, if (is_target_game) patched_size else if (is_target_info_plist) info_plist_size else header.uncompressed_size, .little);
         try out.writeInt(u16, @intCast(entry.filename.len), .little);
         try out.writeInt(u16, @intCast(extra.len), .little);
         try out.writeInt(u16, @intCast(comment.len), .little);

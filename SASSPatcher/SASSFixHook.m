@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
 #import <os/log.h>
 
 static NSString* SASSFixLegacyScope = @"service::kdc.xboxlive.com::MBI_SSL";
@@ -380,14 +381,53 @@ static NSURLRequest* SASSFixPreparedRequest(NSURLRequest* request) {
 
 @end
 
+static BOOL SASSFixReplaceCloudStorageMethod(Class cls, SEL sel, IMP imp) {
+    Method method = class_getInstanceMethod(cls, sel);
+    if (!method) {
+        SASSFixLog(@"Spartan Strike CloudKit hook missing %@", NSStringFromSelector(sel));
+        return NO;
+    }
+    method_setImplementation(method, imp);
+    return YES;
+}
+
+static void SASSFixCloudStorageNoOp(id self, SEL _cmd) {
+}
+
+static void SASSFixCloudStorageDownload(id self, SEL _cmd, id dataPath, void (^completion)(BOOL, NSData*)) {
+    SASSFixLog(@"blocked Spartan Strike CloudKit download %@", dataPath ?: @"(no-path)");
+    if (completion) {
+        completion(NO, nil);
+    }
+}
+
+static void SASSFixCloudStorageUpload(id self, SEL _cmd, NSData* data, NSString* filePath, void (^completion)(BOOL)) {
+    SASSFixLog(@"blocked Spartan Strike CloudKit upload %@", filePath ?: @"(no-path)");
+    if (completion) {
+        completion(NO);
+    }
+}
+
 __attribute__((constructor))
 static void SASSFixInit(void) {
     @autoreleasepool {
         NSBundle* bundle = [NSBundle mainBundle];
         NSDictionary* info = [bundle infoDictionary];
+        NSString* bundleID = [bundle bundleIdentifier] ?: @"unknown";
         SASSFixLog(@"hook dylib loaded");
-        SASSFixLog(@"app %@ version %@ build %@ on %@", [bundle bundleIdentifier] ?: @"unknown", [info objectForKey:@"CFBundleShortVersionString"] ?: @"unknown", [info objectForKey:@"CFBundleVersion"] ?: @"unknown", [[NSProcessInfo processInfo] operatingSystemVersionString]);
+        SASSFixLog(@"app %@ version %@ build %@ on %@", bundleID, [info objectForKey:@"CFBundleShortVersionString"] ?: @"unknown", [info objectForKey:@"CFBundleVersion"] ?: @"unknown", [[NSProcessInfo processInfo] operatingSystemVersionString]);
         [NSURLProtocol registerClass:[SASSFixURLProbe class]];
         SASSFixLog(@"registered NSURLProtocol probe");
+        if ([bundleID rangeOfString:@"spartanstrike" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            Class cls = NSClassFromString(@"CloudStorage");
+            if (cls) {
+                BOOL ok = SASSFixReplaceCloudStorageMethod(cls, @selector(checkAccountAvailability), (IMP)SASSFixCloudStorageNoOp);
+                ok = SASSFixReplaceCloudStorageMethod(cls, @selector(downloadData:onDownloadCompleted:), (IMP)SASSFixCloudStorageDownload) && ok;
+                ok = SASSFixReplaceCloudStorageMethod(cls, @selector(uploadData:filePath:onUploadCompleted:), (IMP)SASSFixCloudStorageUpload) && ok;
+                SASSFixLog(@"Spartan Strike CloudKit hook %@; cloud saves disabled", ok ? @"installed" : @"partially installed");
+            } else {
+                SASSFixLog(@"Spartan Strike CloudKit hook skipped; CloudStorage class not found");
+            }
+        }
     }
 }

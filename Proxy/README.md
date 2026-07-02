@@ -3,6 +3,8 @@ As stated in the main [README.md](https://github.com/brkzlr/SASSFix/blob/master/
 
 We'll use a free and open source tool called **mitmproxy** which will run on your PC or laptop to achieve this.
 
+As of SASSPatcher v3, patched IPAs no longer need this proxy because the same network fix is integrated into the patch through `SASSFix.dylib`. This proxy method is still useful if you want to run the games without modifying the IPA.
+
 ## Update 2026/05/04
 A few days ago, people on Discord reported not being able to login anymore with the Proxy/Patcher fix. Upon investigation it seems that Microsoft has started blocking `XBL2.0` tokens that were being sent to the `activeauth.xboxlive.com` endpoint, effectively breaking SA/SS login flow.
 
@@ -15,9 +17,9 @@ To fix the new problem, use the same instructions but make sure to use the ***`S
 ***UPDATE: Proxy is no longer needed for patched binaries as of v3, because the new proxy fix is integrated into the patch.***
 
 ## How does this work?
-By having mitmproxy active with my script and pointing your iPhone to it, every time the games will try to use the old deprecated API, mitmproxy will automatically change the URL to the correct one depending on the context and forward it:
+By having mitmproxy active with my script and pointing your iPhone to it, the proxy rewrites the old `services.xboxlive.com` requests to the newer Xbox Live endpoints depending on context. With `SASSInterceptV2.py`, it also translates the old `XBL2.0` login flow to the newer `XBL3.0` flow before forwarding requests to Microsoft.
 
-This will restore previously lost functionality and allow you to login and earn achievements with your Xbox profile.
+This restores previously lost functionality and allows you to log in and earn achievements with your Xbox profile without modifying the IPA.
 
 ## Instructions
 ***Please make sure to follow the instructions below in the exact order they're written. Skipping steps ahead will cause you issues.***

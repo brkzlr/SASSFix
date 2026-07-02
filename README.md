@@ -1,16 +1,23 @@
 # SASSFix
-This project aims to fix Halo Spartan Assault and Spartan Strike for iOS in both a non-invasive (**Proxy**) way and binary modification (**SAPatcher**, only for SA) way.
+This project aims to fix Halo Spartan Assault and Spartan Strike for iOS through both a non-invasive (**Proxy**) method and a binary modification (**SASSPatcher**) method.
 
 For more information about each variant, feel free to check their respective README.md in the folders.
+
+## Update 2026/07/02
+SASSPatcher v3 can now patch IPA files directly for both Spartan Assault and Spartan Strike v1.1.1. It injects `SASSFix.dylib`, an in-app network hook that handles the same URL and Xbox token fixes as `SASSInterceptV2.py`, so patched IPAs no longer need mitmproxy.
+
+Spartan Assault still gets the achievement logic fix for the 5 missing achievements. Spartan Strike only gets the network hook and a small CloudKit workaround for sideloaded installs. The workaround disables Spartan Strike cloud saves, but local saves still work.
+
+The patcher also rebuilds the IPA in a SideStore-friendly format and lowers `MinimumOSVersion` to iOS 12 when an IPA claims it needs something newer.
 
 ## Update 2026/05/04
 As of a few days ago, Microsoft has started blocking the `XBL2.0` token authorization flow which both SA and SS used, effectively breaking the login for these games once again.
 
-You will now need to use the new ***`SASSInterceptV2.py`*** mitmproxy script to be able to login to both games, ~~***including patched iOS SA***~~. More info **[here](https://github.com/brkzlr/SASSFix/blob/master/Proxy/README.md)**.
+~~You will now need to use the new ***`SASSInterceptV2.py`*** mitmproxy script to be able to login to both games, ***including patched iOS SA***. More info **[here](https://github.com/brkzlr/SASSFix/blob/master/Proxy/README.md)**.~~
 
-~~**Note: You now only need the SAPatcher if you're interested in obtaining the 5 unobtainable achievements in the iOS version of SA, as the login fix included in the patch is now obsolete. If you don't care about the 5 achievements for whatever reason and just want to be able to login again, you can skip this and just use the Proxy way.**~~
+~~**Note: You now only need the SASSPatcher if you're interested in obtaining the 5 unobtainable achievements in the iOS version of SA, as the login fix included in the patch is now obsolete. If you don't care about the 5 achievements for whatever reason and just want to be able to login again, you can skip this and just use the Proxy way.**~~
 
-***UPDATE: Proxy is no longer needed for patched binaries as of v3, because the new proxy fix is integrated into the patch.***
+***UPDATE: Proxy is no longer needed for patched binaries as of v3, because the new proxy fix is integrated into the patch. Check newest update above.***
 
 ## What's wrong with the games?
 The games started refusing Xbox profile login requests near the beginning of 2024, stopping people from being able to earn the iOS version of achievements for these multi-platform games.
@@ -20,7 +27,7 @@ These games were also delisted for a very long time from Apple's AppStore, way b
 ## Why did this happen?
 What happened is that during the development of this game they used a deprecated Xbox Live URI endpoint, which near Xbox 360 sunset were shutdown, effectively breaking the games' login functionality which means no more shiny new achievements for your profile.
 
-This endpoind is "https://services.xboxlive.com" which was used for profile login and achievement unlocking/status checking, but Microsoft now expects you to use:
+This endpoint is "https://services.xboxlive.com" which was used for profile login and achievement unlocking/status checking, but Microsoft now expects you to use:
 - "https://profile.xboxlive.com" for profile login
 - "https://achievements.xboxlive.com" for anything achievements related
 
@@ -31,7 +38,9 @@ The logical answer would be that the developers would have to push a new update 
 
 But given that these games were delisted for a very long time, it's extremely unlikely the devs would push even a simple update like this.
 
-Luckily, because the fix requires only changing some URLs, we can handle this ourselves by either patching the URLs used inside the binary (**SAPatcher**, only for SA) or using a proxy server (**Proxy**) to redirect the calls made by the iPhone to point to the new URLs.
+Originally, because the fix only required changing some URLs, we could handle this ourselves by either patching the URLs used inside the binary or using a proxy server (**Proxy**) to redirect the calls made by the iPhone to point to the new URLs.
+
+Microsoft later blocked the old `XBL2.0` token flow too. SASSPatcher v3 handles both pieces inside the app by injecting `SASSFix.dylib`: it rewrites the old Xbox Live URLs and converts the old login flow to the newer `XBL3.0` flow. The proxy method still exists for users who want a non-patched setup, but patched IPAs no longer need it.
 
 Instructions on how to fix the games and the files necessary can be found in the respective folders, good luck Spartan!
 
@@ -47,7 +56,7 @@ So even if you were able to login and earn achievements on this version of SA, y
 
 ***That was the case until now...***
 
-Using the patcher I wrote inside the **SAPatcher** folder will also fix these 5 missing achievements to be finally obtainable for the first time since the iOS version released. Just to be clear, the patcher does not modify the requirements or tamper with the achievements in any way, it simply lets the game know it forgot about 5 achievements.
+Using the patcher I wrote inside the **SASSPatcher** folder will also fix these 5 missing achievements to be finally obtainable for the first time since the iOS version released. Just to be clear, the patcher does not modify the requirements or tamper with the achievements in any way, it simply lets Spartan Assault know it forgot about 5 achievements.
 
 The game would always try to unlock these 5 achievements when you fulfilled the requirements, it's just that the game is suffering from Alzheimers and will forget about them on the way to unlock them.
 

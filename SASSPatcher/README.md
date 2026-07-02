@@ -1,12 +1,19 @@
-# SAPatcher
-This program will patch your Spartan Assault binary (only v1.1.1 supported for now) to enable profile login and achievements unlock so you won't need to always fiddle with a proxy server to play and earn achievements.
+# SASSPatcher
+This program patches Spartan Assault and Spartan Strike v1.1.1 IPAs so the games can log in and talk to the newer Xbox Live endpoints without mitmproxy.
 
-Additionally this will also fix the previously unobtainable 5 achievements to be obtainable once again.
+For Spartan Assault, it also makes the previously unobtainable 5 achievements obtainable once again. For Spartan Strike, it only applies the network fix.
 
-***A write up detailing the fix and how it was found is available [here](https://github.com/brkzlr/SASSFix/blob/master/SAPatcher/WRITEUP.md).***
+***A write up detailing the fix and how it was found is available [here](https://github.com/brkzlr/SASSFix/blob/master/SASSPatcher/WRITEUP.md).***
+
+## Update 2026/07/02
+SASSPatcher v3 patches IPA files directly. It rebuilds the IPA, injects `SASSFix.dylib`, fixes the Xbox Live URL/token flow in-app and no longer requires mitmproxy for patched IPAs.
+
+Spartan Strike support has been added for v1.1.1. For Spartan Strike, the patcher only applies the network fix.
+
+Spartan Strike's CloudKit path is disabled by the hook to avoid sideloaded install crashes caused by missing/invalid CloudKit entitlements. This disables cloud saves for Spartan Strike, but local saves still work.
 
 ## Update 2026/05/04
-~~As of a few days ago, Microsoft has started blocking the `XBL2.0` token authorization flow which both SA and SS used, effectively breaking the login for these games once again.~~
+As of a few days ago, Microsoft has started blocking the `XBL2.0` token authorization flow which both SA and SS used, effectively breaking the login for these games once again.
 
 ~~You will now need to use the new ***`SASSInterceptV2.py`*** mitmproxy script to be able to login to both games, ***including patched iOS SA***. More info **[here](https://github.com/brkzlr/SASSFix/blob/master/Proxy/README.md)**.~~
 
@@ -18,7 +25,7 @@ No longer relevant as of the v3 patcher, because the new proxy fix is integrated
 Head over to [Releases](https://github.com/brkzlr/SASSFix/releases) and grab the latest version zip package for your OS and architecture.
 
 The patcher package now contains two required files for IPA patching:
-- `SAPatcher`/`SAPatcher.exe`: the patcher executable.
+- `SASSPatcher`/`SASSPatcher.exe`: the patcher executable.
 - `SASSFix.dylib`: the in-app login hook that gets added to the IPA.
 
 Keep `SASSFix.dylib` next to the patcher executable. IPA patching will fail if the dylib is missing or renamed.
@@ -29,14 +36,21 @@ If you got it directly from a website, it's most likely decrypted already.
 - Put the patcher, `SASSFix.dylib` and your `.IPA` file in the same folder.
 - Open a terminal/command prompt in that folder.
 - Run the patcher with the `.IPA` file as the input:
-    - Linux/MacOS: `./SAPatcher "Halo - Spartan Assault.ipa"` (or whatever is the name of the IPA file)
-      - If you downloaded the patcher from Releases instead of building it yourself, you might have to `chmod +x SAPatcher` first.
-    - Windows: `SAPatcher.exe "Halo - Spartan Assault.ipa"` (or whatever is the name of the IPA file)
-      - On Windows 11, you might have Powershell as default instead of command prompt, in which case you need to type `.\SAPatcher.exe "Halo - Spartan Assault.ipa"` instead.
+    - Linux/macOS: `./SASSPatcher "Halo - Spartan Assault.ipa"` (or whatever is the name of the IPA file)
+      - If you downloaded the patcher from Releases instead of building it yourself, you might have to `chmod +x SASSPatcher` first.
+    - Windows: `SASSPatcher.exe "Halo - Spartan Assault.ipa"` (or whatever is the name of the IPA file)
+      - On Windows 11, you might have PowerShell as default instead of command prompt, in which case you need to type `.\SASSPatcher.exe "Halo - Spartan Assault.ipa"` instead.
 
 This should produce a new file ending with `-patched.ipa` next to the original IPA. The new IPA contains both the patched `Game` binary and `Payload/Game.app/Frameworks/SASSFix.dylib`. Install that IPA file using your preferred installation method.
 
+When patching an IPA, the patcher also:
+- Rebuilds the IPA in a format accepted by sideloading tools that reject some older/repacked IPAs.
+- Lowers `MinimumOSVersion` to iOS 12 if the IPA claims it needs a newer iOS version.
+
 *Instructions on how to install IPA files are out of scope, plenty of tutorials and methods are available if you look it up on Google.*
+
+### Debug logs
+The hook logs useful startup and network information with the `[SASSFix]` prefix. On macOS, you can use Console.app while the device is connected and filter for `[SASSFix]`.
 
 ### What if I already have the game installed on a jailbroken device?
 You can still use the normal IPA patching method above and install the patched IPA. If you want to keep your existing installation and avoid uninstalling/reinstalling the game, patch an IPA first and then copy the patched files out of it. This is useful because uninstalling and reinstalling the IPA can wipe your game save.
@@ -49,27 +63,29 @@ You can still use the normal IPA patching method above and install the patched I
 - Copy `SASSFix.dylib` into that `Frameworks` folder.
 - Make sure both `Game` and `SASSFix.dylib` are executable. In Filza, this means the files need Read + Execute enabled for everyone and Write enabled for the owner. If using SSH, run `chmod 755 Game Frameworks/SASSFix.dylib` from inside `Game.app`.
 
-**Note: Running the patcher directly on a standalone `Game` binary still works for the static Spartan Assault binary patch and writes `GamePatched`, but it does not add `SASSFix.dylib`. This means that you'll need to run the proxy server together with the patch to login. For the full current login fix, use a patched IPA as the source for both files so you skip the need for a proxy.**
+**Note: Running the patcher directly on a standalone `Game` binary still works for the static Spartan Assault achievement patch and writes `GamePatched`, but it does not add `SASSFix.dylib`. This means standalone binary patching does not include the current login fix. For the full current fix, patch an IPA and use the patched IPA as the source for both files.**
+
+**Spartan Strike note:** The patched Spartan Strike hook disables CloudKit/cloud saves to avoid entitlement crashes on sideloaded installs. Local saves still work.
 
 ## Build
 You don't need to build the patcher yourself if there's already a prebuilt package for your OS/Arch combo in [Releases](https://github.com/brkzlr/SASSFix/releases).
 
 You'll need [Zig](https://ziglang.org/download/) to compile the source code into the patcher executable.
 ```
-zig build-exe -O ReleaseFast SAPatcher.zig
+zig build-exe -O ReleaseFast SASSPatcher.zig
 ```
 
-To build `SASSFix.dylib`, you need MacOS with Xcode and an iPhoneOS SDK:
+To build `SASSFix.dylib`, you need macOS with Xcode and an iPhoneOS SDK:
 ```
 sh build_hook.sh
 ```
 
 `build_hook.sh` always tries to build `arm64` and will also build `armv7` if your installed iPhoneOS SDK still supports it. If both builds succeed, it creates a fat `SASSFix.dylib` containing `armv7` and `arm64`, otherwise it falls back to an `arm64` only dylib.
 
-For a full local build from the `SAPatcher` folder:
+For a full local build from the `SASSPatcher` folder:
 ```
 sh build_hook.sh
-zig build-exe -O ReleaseFast SAPatcher.zig
+zig build-exe -O ReleaseFast SASSPatcher.zig
 ```
 
-Keep the generated `SASSFix.dylib` next to the generated `SAPatcher` executable when patching IPAs.
+Keep the generated `SASSFix.dylib` next to the generated `SASSPatcher` executable when patching IPAs.

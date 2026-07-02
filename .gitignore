@@ -1,6 +1,6 @@
 .*
 *.dylib
 *.ipa
-SAPatcher/SAPatcher
-SAPatcher/SAPatcher.exe
-SAPatcher/SAPatcher.pdb
+SASSPatcher/SASSPatcher
+SASSPatcher/SASSPatcher.exe
+SASSPatcher/SASSPatcher.pdb
