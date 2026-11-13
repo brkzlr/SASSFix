@@ -41,7 +41,7 @@ pub fn main(init: std.process.Init) void {
         return;
     };
 
-    if (std.ascii.eqlIgnoreCase(std.fs.path.extension(filePath), ".ipa")) {
+    if (std.ascii.eqlIgnoreCase(std.Io.Dir.path.extension(filePath), ".ipa")) {
         patchIpa(init, allocator, filePath) catch |err| {
             std.debug.print("Error patching IPA \"{s}\"! Error: {s}\n", .{ filePath, @errorName(err) });
         };
@@ -431,7 +431,7 @@ fn injectHookDylibLoadCommandMachO(macho: []u8) !void {
             const name_offset: usize = @intCast(std.mem.readInt(u32, macho[command_offset + 8 ..][0..4], .little));
             if (name_offset < cmdsize) {
                 const name = macho[command_offset + name_offset .. command_offset + cmdsize];
-                const name_end = std.mem.indexOfScalar(u8, name, 0) orelse name.len;
+                const name_end = std.mem.findScalar(u8, name, 0) orelse name.len;
                 if (std.mem.eql(u8, name[0..name_end], hookDylibLoadPath))
                     return;
             }
@@ -478,7 +478,7 @@ fn PatchPlist(info_plist: []u8) !bool {
     const target_version = "12.0";
     const plist = struct {
         fn patchVersion(value: []u8, target: []const u8) !bool {
-            const major = std.fmt.parseInt(u32, value[0 .. std.mem.indexOfScalar(u8, value, '.') orelse value.len], 10) catch return error.UnsupportedMinimumOSVersion;
+            const major = std.fmt.parseInt(u32, value[0 .. std.mem.findScalar(u8, value, '.') orelse value.len], 10) catch return error.UnsupportedMinimumOSVersion;
             if (major <= 12)
                 return false;
             if (value.len != target.len)
@@ -533,9 +533,9 @@ fn PatchPlist(info_plist: []u8) !bool {
     if (!std.mem.startsWith(u8, info_plist, "bplist00")) {
         const minimum_os_key = "<key>MinimumOSVersion</key>";
         const open_string = "<string>";
-        if (std.mem.indexOf(u8, info_plist, minimum_os_key)) |key_offset| {
-            const value_start = key_offset + minimum_os_key.len + (std.mem.indexOf(u8, info_plist[key_offset + minimum_os_key.len ..], open_string) orelse return error.UnsupportedMinimumOSVersion) + open_string.len;
-            const value_end = value_start + (std.mem.indexOf(u8, info_plist[value_start..], "</string>") orelse return error.UnsupportedMinimumOSVersion);
+        if (std.mem.find(u8, info_plist, minimum_os_key)) |key_offset| {
+            const value_start = key_offset + minimum_os_key.len + (std.mem.find(u8, info_plist[key_offset + minimum_os_key.len ..], open_string) orelse return error.UnsupportedMinimumOSVersion) + open_string.len;
+            const value_end = value_start + (std.mem.find(u8, info_plist[value_start..], "</string>") orelse return error.UnsupportedMinimumOSVersion);
             return try plist.patchVersion(info_plist[value_start..value_end], target_version);
         }
         return false;
@@ -622,11 +622,11 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
             return error.Zip64Unsupported;
         }
 
-        const filename = try ipaReader.interface.readAlloc(allocator, central_header.filename_len);
+        const filename = try ipaReader.interface.readAllocAll(allocator, central_header.filename_len);
         errdefer allocator.free(filename);
-        const extra = try ipaReader.interface.readAlloc(allocator, central_header.extra_len);
+        const extra = try ipaReader.interface.readAllocAll(allocator, central_header.extra_len);
         errdefer allocator.free(extra);
-        const comment = try ipaReader.interface.readAlloc(allocator, central_header.comment_len);
+        const comment = try ipaReader.interface.readAllocAll(allocator, central_header.comment_len);
         errdefer allocator.free(comment);
         if (std.mem.eql(u8, filename, hookDylibIpaPath)) {
             std.debug.print("IPA already contains \"{s}\". Aborting to avoid writing a duplicate hook dylib entry...\n", .{hookDylibIpaPath});
@@ -748,7 +748,7 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
 
     if (game.len > std.math.maxInt(u32))
         return error.ZipOutputTooLarge;
-    const patched_crc32 = std.hash.crc.Crc32.hash(game);
+    const patched_crc32 = std.hash.Crc32.hash(game);
     const patched_size: u32 = @intCast(game.len);
     var compressed_game_writer = try std.Io.Writer.Allocating.initCapacity(allocator, game.len);
     defer compressed_game_writer.deinit();
@@ -769,7 +769,7 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
     if (should_patch_info_plist) {
         if (info_plist_buf.len > std.math.maxInt(u32))
             return error.ZipOutputTooLarge;
-        info_plist_crc32 = std.hash.crc.Crc32.hash(info_plist_buf);
+        info_plist_crc32 = std.hash.Crc32.hash(info_plist_buf);
         info_plist_size = @intCast(info_plist_buf.len);
         var compress_info_plist = try std.compress.flate.Compress.init(&compressed_info_plist_writer.writer, &compress_buffer, .raw, .default);
         try compress_info_plist.writer.writeAll(info_plist_buf);
@@ -781,7 +781,7 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
 
     if (hook_dylib.len > std.math.maxInt(u32))
         return error.ZipOutputTooLarge;
-    const hook_crc32 = std.hash.crc.Crc32.hash(hook_dylib);
+    const hook_crc32 = std.hash.Crc32.hash(hook_dylib);
     const hook_size: u32 = @intCast(hook_dylib.len);
     const hook_mod_date: u16 = 0x5CE2; // 2026-07-02
 
@@ -795,10 +795,10 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
         }
     }.lessThan);
 
-    const out_basename = try std.fmt.allocPrint(allocator, "{s}-patched.ipa", .{std.fs.path.stem(std.fs.path.basename(ipaPath))});
+    const out_basename = try allocator.print("{s}-patched.ipa", .{std.Io.Dir.path.stem(std.Io.Dir.path.basename(ipaPath))});
     defer allocator.free(out_basename);
-    const outPath = if (std.fs.path.dirname(ipaPath)) |dir|
-        try std.fs.path.join(allocator, &.{ dir, out_basename })
+    const outPath = if (std.Io.Dir.path.dirname(ipaPath)) |dir|
+        try std.Io.Dir.path.join(allocator, &.{ dir, out_basename })
     else
         try allocator.dupe(u8, out_basename);
     defer allocator.free(outPath);
@@ -823,7 +823,7 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
             try out.writeAll(&std.zip.local_file_header_sig);
             try out.writeInt(u16, 20, .little);
             try out.writeInt(u16, 0, .little);
-            try out.writeInt(u16, @intFromEnum(std.zip.CompressionMethod.deflate), .little);
+            try out.writeInt(u16, @backingInt(std.zip.CompressionMethod.deflate), .little);
             try out.writeInt(u16, entry.central_header.last_modification_time, .little);
             try out.writeInt(u16, entry.central_header.last_modification_date, .little);
             try out.writeInt(u32, patched_crc32, .little);
@@ -838,7 +838,7 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
             try out.writeAll(&std.zip.local_file_header_sig);
             try out.writeInt(u16, 20, .little);
             try out.writeInt(u16, 0, .little);
-            try out.writeInt(u16, @intFromEnum(std.zip.CompressionMethod.deflate), .little);
+            try out.writeInt(u16, @backingInt(std.zip.CompressionMethod.deflate), .little);
             try out.writeInt(u16, entry.central_header.last_modification_time, .little);
             try out.writeInt(u16, entry.central_header.last_modification_date, .little);
             try out.writeInt(u32, info_plist_crc32, .little);
@@ -867,7 +867,7 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
     try out.writeAll(&std.zip.local_file_header_sig); // Local file header signature.
     try out.writeInt(u16, 20, .little); // Version needed: ZIP 2.0.
     try out.writeInt(u16, 0, .little); // General purpose bit flags.
-    try out.writeInt(u16, @intFromEnum(std.zip.CompressionMethod.store), .little); // Compression: store.
+    try out.writeInt(u16, @backingInt(std.zip.CompressionMethod.store), .little); // Compression: store.
     try out.writeInt(u16, 0, .little); // Last mod time.
     try out.writeInt(u16, hook_mod_date, .little); // Last mod date.
     try out.writeInt(u32, hook_crc32, .little); // CRC-32.
@@ -914,7 +914,7 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
         try out.writeInt(u16, if (has_unix_mode) header.version_made_by else @as(u16, (3 << 8) | 20), .little);
         try out.writeInt(u16, if (is_patched_entry) 20 else header.version_needed_to_extract, .little);
         try out.writeInt(u16, if (is_patched_entry) 0 else @as(u16, @bitCast(header.flags)), .little);
-        try out.writeInt(u16, if (is_patched_entry) @intFromEnum(std.zip.CompressionMethod.deflate) else @intFromEnum(header.compression_method), .little);
+        try out.writeInt(u16, if (is_patched_entry) @backingInt(std.zip.CompressionMethod.deflate) else @backingInt(header.compression_method), .little);
         try out.writeInt(u16, header.last_modification_time, .little);
         try out.writeInt(u16, header.last_modification_date, .little);
         try out.writeInt(u32, if (is_target_game) patched_crc32 else if (is_target_info_plist) info_plist_crc32 else header.crc32, .little);
@@ -937,7 +937,7 @@ fn patchIpa(init: std.process.Init, allocator: std.mem.Allocator, ipaPath: []con
     try out.writeInt(u16, (3 << 8) | 20, .little); // Made by Unix, ZIP 2.0.
     try out.writeInt(u16, 20, .little); // Version needed: ZIP 2.0.
     try out.writeInt(u16, 0, .little); // General purpose bit flags.
-    try out.writeInt(u16, @intFromEnum(std.zip.CompressionMethod.store), .little); // Compression: store.
+    try out.writeInt(u16, @backingInt(std.zip.CompressionMethod.store), .little); // Compression: store.
     try out.writeInt(u16, 0, .little); // Last mod time.
     try out.writeInt(u16, hook_mod_date, .little); // Last mod date.
     try out.writeInt(u32, hook_crc32, .little); // CRC-32.

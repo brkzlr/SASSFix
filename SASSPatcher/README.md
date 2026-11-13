@@ -74,9 +74,9 @@ You can still use the normal IPA patching method above and install the patched I
 ## Build
 You don't need to build the patcher yourself if there's already a prebuilt package for your OS/Arch combo in [Releases](https://github.com/brkzlr/SASSFix/releases).
 
-You'll need [Zig](https://ziglang.org/download/) to compile the source code into the patcher executable.
+You'll need [Zig](https://ziglang.org/download/) 0.17.x to compile the source code into the patcher executable.
 ```
-zig build-exe -O ReleaseFast SASSPatcher.zig
+zig build-exe -O fast SASSPatcher.zig
 ```
 
 To build `SASSFix.dylib`, you need macOS with Xcode and an iPhoneOS SDK:
@@ -89,7 +89,7 @@ sh build_hook.sh
 For a full local build from the `SASSPatcher` folder:
 ```
 sh build_hook.sh
-zig build-exe -O ReleaseFast SASSPatcher.zig
+zig build-exe -O fast SASSPatcher.zig
 ```
 
 Keep the generated `SASSFix.dylib` next to the generated `SASSPatcher` executable when patching IPAs.
